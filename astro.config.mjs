@@ -9,7 +9,7 @@ import rehypeKatex from 'rehype-katex';
 // `astro build` -> dist/ of plain HTML/CSS/JS, deployable to any CDN.
 export default defineConfig({
   output: 'static',
-  site: 'https://how-llms-work.pages.dev',
+  site: 'https://how-llms-work.rightspeed.pages.dev',
   integrations: [
     react(),
     tailwind({ applyBaseStyles: false }),

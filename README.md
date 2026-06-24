@@ -7,7 +7,7 @@ slider and see the probability distribution change shape.
 
 Mechanics first, metaphors second. Real numbers, not placeholders.
 
-**Live:** https://how-llms-work-1hu.pages.dev
+**Live:** https://how-llms-work.rightspeed.pages.dev
 
 ## Stack
 
@@ -40,7 +40,8 @@ pnpm preview    # serve the static build
 
 ```bash
 pnpm build
-npx wrangler pages deploy dist --project-name=how-llms-work --branch=main
+npx wrangler pages deploy dist --project-name=rightspeed --branch=how-llms-work
+# serves at https://how-llms-work.rightspeed.pages.dev
 ```
 
 Cloudflare credentials are read from the environment (`CLOUDFLARE_API_TOKEN`,
