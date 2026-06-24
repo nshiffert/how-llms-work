@@ -61,13 +61,33 @@ lesson's island hydrated, fails on console/page errors, and writes a screenshot 
 If it fails, fix the lesson/island and return to step 8. (If Playwright isn't installed it runs a static
 fallback check and tells you how to enable the full one — that's acceptable.)
 
-### 10. Finalize
-- In `src/data/topics.ts`, flip this topic's `status` from `'planned'` to `'ready'`.
-- Confirm the frontmatter: `title`, `hook` (the opening line / top objective), and `crossLinks` all resolve
-  to real slugs in `src/data/topics.ts`. The page is served at `/topics/<slug>` by
-  `src/pages/topics/[slug].astro` and gets meta description + Open Graph tags via the `SocialMeta`
-  component — verify the OG/meta render (the hook is the description). No new routing needed.
-- Run `npm run build` one last time to confirm everything is still green.
+### 10. Finalize — publish + wire up the navigation web
+- **Homepage link.** In `src/data/topics.ts`, flip this topic's `status` from `'planned'` to `'ready'`.
+  This is what publishes it on the homepage: `src/pages/index.astro` renders a real clickable
+  `<a href="/topics/<slug>">` card ONLY for `ready` topics (planned ones are greyed-out `<div>`s).
+  After the rebuild in this step, confirm the topic's card on the built homepage is now a live link (it
+  appears in its category grid, and in the "Playable now" strip if it's among the first ready topics).
+- **Outgoing cross-links.** Confirm this lesson's frontmatter `crossLinks` all resolve to real slugs in
+  `src/data/topics.ts`. They render automatically as the "This connects to" section via the `CrossLinks`
+  component — do not hand-write that section.
+- **Bidirectional cross-links (do not skip — this is how other lessons link back to this one).** The
+  `CrossLinks` section renders ONLY from a lesson's OWN frontmatter, so a link is one-way unless both
+  lessons list each other. Make every connection involving this lesson mutual, across the lessons that
+  already exist on disk (`src/content/topics/*.mdx`, including `tokenization` and `attention`):
+  1. **Outbound reciprocity:** for each slug `S` in THIS lesson's `crossLinks`, if `src/content/topics/S.mdx`
+     exists and its frontmatter `crossLinks` does NOT include this slug, add this slug to `S`'s `crossLinks`.
+  2. **Inbound reciprocity:** grep every existing `src/content/topics/*.mdx` for frontmatter `crossLinks`
+     that include this slug; for each such lesson `Y` not already in THIS lesson's `crossLinks`, add `Y`.
+  Result: at this point, every edge between this lesson and an already-built lesson points both ways.
+  Edges to not-yet-built lessons get reciprocated when those lessons run this same step. Adding a back-link
+  to an earlier, already-committed lesson is expected and safe (it is additive — it does not regress that
+  lesson's review). Skip a reciprocal link only if it is genuinely nonsensical pedagogically; default to
+  adding it.
+- **Meta/OG.** The page is served at `/topics/<slug>` by `src/pages/topics/[slug].astro` and gets the meta
+  description + Open Graph tags via the `SocialMeta` component (the `hook` is the description). Verify they
+  render. No new routing needed.
+- Run `npm run build` one last time to confirm everything — this lesson, the homepage card, and every
+  edited back-link target — is still green.
 
 ### 11. Record progress
 In `ralph/PROGRESS.md`, set this row's status to `done`. (You'll fill the commit column right after committing.)
@@ -75,6 +95,8 @@ In `ralph/PROGRESS.md`, set this row's status to `done`. (You'll fill the commit
 ### 12. Commit (NEVER push)
 Stage and commit everything for this lesson:
 `git add -A && git commit` with a message like `Add <Title> lesson (<slug>): mdx, <Island>, viz verified`.
+(The commit will also include `src/data/topics.ts` and any sibling `*.mdx` files you touched to add
+reciprocal back-links — that's expected; mention it in the message body if more than one or two.)
 End the commit message body with the trailer:
 `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
 Then put the commit short-sha into this row's Commit column in `ralph/PROGRESS.md` and amend or make a tiny

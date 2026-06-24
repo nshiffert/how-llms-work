@@ -80,9 +80,15 @@ Brief but self-contained; Ralph also re-reads the matching `ralph/notes/all-topi
 9. **Verify**: `node scripts/verify-lesson.mjs <slug>` — builds, serves `dist/`, loads `/topics/<slug>`,
    asserts the island hydrated (island root has child nodes), fails on console errors, screenshots to
    `ralph/logs/<slug>.png`. Loop fixes and retries on failure.
-10. **Finalize**: flip the topic to `status: 'ready'` in `src/data/topics.ts`; confirm `title`, `hook`,
-    `crossLinks`; ensure meta description + OG tags via the existing `SocialMeta` component; URL = slug
-    (already routed by `pages/topics/[slug].astro`).
+10. **Finalize — publish + wire navigation**:
+    - flip the topic to `status: 'ready'` in `src/data/topics.ts` — this is what makes the **homepage**
+      card a live link (`index.astro` only links `ready` topics; planned ones are greyed-out divs);
+    - confirm `title`, `hook`, `crossLinks`, and the meta/OG via `SocialMeta` (URL = slug, already routed);
+    - **make cross-links bidirectional** so other lessons link *back* to this one: the `CrossLinks`
+      "This connects to" section renders only from a lesson's own frontmatter, so for every already-built
+      lesson this one connects to, add this slug to that lesson's `crossLinks` (and pull in any existing
+      lesson that already lists this slug). Adding a back-link to an earlier committed lesson is additive
+      and expected; the iteration's commit will touch those sibling `*.mdx` files plus `topics.ts`.
 11. Update `PROGRESS.md` row → `done` with the commit short-sha.
 12. `git add -A && git commit` — **never push**.
 13. Stop. The outer loop restarts fresh for the next topic.
