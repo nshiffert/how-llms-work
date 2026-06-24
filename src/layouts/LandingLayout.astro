@@ -5,14 +5,18 @@ import '@fontsource/ibm-plex-mono/500.css';
 import '@fontsource/ibm-plex-mono/600.css';
 import LandingHeader from '../components/landing/LandingHeader.astro';
 import LandingFooter from '../components/landing/LandingFooter.astro';
+import SocialMeta from '../components/SocialMeta.astro';
 
 interface Props {
   title: string;
   description?: string;
+  /** Social-share image path; defaults to the site-wide card. */
+  image?: string;
 }
 const {
   title,
   description = 'An interactive learning center for LLM and transformer internals. Mechanics first, metaphors second.',
+  image,
 } = Astro.props;
 ---
 
@@ -23,7 +27,7 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="color-scheme" content="dark" />
-    <meta name="description" content={description} />
+    <SocialMeta title={title} description={description} image={image} />
     <title>{title}</title>
     <style is:global>
       * { box-sizing: border-box; }

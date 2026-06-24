@@ -78,12 +78,14 @@ your browser:
   <span class="font-semibold text-fg">Why ~200,000 tokens?</span> The
   <code>o200k_base</code> vocabulary GPT-4o uses holds roughly <strong>200,000
   tokens</strong> — about double the ~100k of the older <code>cl100k_base</code>.
-  That size is thought to hit a sweet spot. A bigger vocabulary lets numbers,
-  common words, and non-Latin scripts claim their own tokens instead of
-  shattering: digits tokenize more consistently (<strong>better math
-  representation</strong>), and scripts like Chinese, Japanese, and Hindi cost
-  far fewer tokens than they used to (<strong>better cross-language support</strong>,
-  lower token tax). Going bigger isn't free — every token adds a row to the
+  That size is thought to hit a sweet spot. A bigger vocabulary lets more common
+  words and non-Latin scripts claim their own token instead of shattering into
+  pieces: scripts like Chinese, Japanese, and Hindi cost far fewer tokens than
+  they did under the older ~100k vocabulary (<strong>better cross-language
+  support</strong>, lower token tax). Digit handling is <em>not</em> one of those
+  wins — both <code>cl100k_base</code> and <code>o200k_base</code> chop numbers
+  into the same ≤3-digit chunks, so the bigger vocabulary buys no arithmetic
+  advantage there. Going bigger isn't free — every token adds a row to the
   embedding table and the final output softmax (vocabulary × model width) — so
   ~200k is the current balance between shorter sequences and a layer that still
   fits. That dial is exactly what the Vocabulary Handling topic is about.
@@ -103,6 +105,7 @@ count is:
 | `r ·` | newer (6) + wider (3) | 9 |
 | `w e` | lowest (2) + newer (6) | 8 |
 | `n e` | newer (6) + new (2) | 8 |
+| `e w` | newer (6) + new (2) | 8 |
 | `l o` | low (5) + lowest (2) | 7 |
 
 `e r` and `r ·` tie at 9; byte-pair encoding (BPE) breaks the tie deterministically (first pair seen),

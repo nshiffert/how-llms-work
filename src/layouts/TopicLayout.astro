@@ -8,12 +8,14 @@ interface Props {
   category: CategoryId;
   hook: string;
   crossLinks?: string[];
+  /** Per-lesson social-share image (the lesson's demo render). */
+  image?: string;
 }
-const { title, category, hook, crossLinks = [] } = Astro.props;
+const { title, category, hook, crossLinks = [], image } = Astro.props;
 const cat = CATEGORIES.find((c) => c.id === category)!;
 ---
 
-<BaseLayout title={title} description={hook}>
+<BaseLayout title={title} description={hook} image={image} type="article">
   <article class="mx-auto max-w-[48rem] px-5 py-10">
     <!-- Section 1: The hook — the only "header" content; opens the page. -->
     <header class="mb-2">

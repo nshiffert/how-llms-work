@@ -9,6 +9,7 @@
     "preview": "astro preview",
     "serve": "http-server dist -p 8080 -c-1",
     "deploy": "bash scripts/deploy.sh",
+    "images": "node scripts/generate-images.mjs",
     "astro": "astro"
   },
   "dependencies": {
