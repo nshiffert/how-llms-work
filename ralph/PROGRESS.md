@@ -16,7 +16,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 |----|--------------------------|------------|--------|-------------------------------------------|--------|
 | 0  | tokenization             | basics     | done   | (pre-existing)                            | —      |
 | 0  | attention                | basics     | done   | (pre-existing)                            | —      |
-| 1  | context-window           | basics     | todo   | [outline](outlines/context-window.md)     |        |
+| 1  | context-window           | basics     | done   | [outline](outlines/context-window.md)     |        |
 | 2  | embeddings               | basics     | todo   | [outline](outlines/embeddings.md)         |        |
 | 3  | positional-encoding      | basics     | todo   | [outline](outlines/positional-encoding.md)|        |
 | 4  | softmax                  | math       | todo   | [outline](outlines/softmax.md)            |        |

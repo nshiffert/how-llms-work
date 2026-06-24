@@ -79,7 +79,7 @@ export const TOPICS: Topic[] = [
     title: 'Context Window',
     hook: 'Attention is all-pairs, so doubling the context quadruples the cost — the wall every long-context trick is trying to climb.',
     category: 'basics',
-    status: 'planned',
+    status: 'ready',
     viz: 'Quadratic cost explorer',
   },
   {

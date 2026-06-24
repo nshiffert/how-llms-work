@@ -1,0 +1,224 @@
+---
+title: Context Window
+category: basics
+hook: Attention is all-pairs, so doubling the context quadruples the cost — the wall every long-context trick is trying to climb.
+crossLinks:
+  - attention
+  - rag
+  - tokenization
+draft: false
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import ContextCostExplorer from '../../components/islands/ContextCostExplorer.tsx';
+
+<Section n={1} title="What a context window is" tag="A token budget, and why the budget is finite">
+
+The **context window** is the maximum number of tokens a model can attend over
+at once — every token of your prompt, plus everything it has generated so far,
+has to fit inside it. It is a hard budget, spent in [tokens](/topics/tokenization),
+not characters or words. When people say a model is "128K," they mean the window
+holds about 128,000 tokens; ask for the 128,001st and the oldest tokens fall off
+the edge.
+
+The instinct is to read that number as an arbitrary product decision — a cap
+someone could lift if they felt generous. It isn't. The window is finite because
+the cost of [attention](/topics/attention) grows with the **square** of the
+number of tokens, and that square is what runs you out of GPU memory. The window
+is wherever the hardware says "no more."
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> The context window is
+  the maximum sequence length <strong>N</strong> a model can process in one
+  forward pass. It is bounded by the <strong>N×N attention matrix</strong> —
+  every token scores every other token — which costs <em>N²</em> compute and
+  <em>N²</em> memory per layer, per attention head.
+</div>
+
+That single fact — cost scales as N², not N — is the whole lesson. It explains
+why long context is expensive, why the workarounds look the way they do, and
+what they each give up to get there.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Every token scores every other token → N² work per layer per head">
+
+Recall what [attention](/topics/attention) actually computes: for each token, a
+**query** vector is compared against the **key** vector of every token it can
+see, by taking a dot product. With N tokens, that is N queries × N keys = **N²
+dot products** — a full N×N score matrix — and it happens *independently in every
+layer and every attention head*. Nothing about the operation is linear in N; it
+is quadratic by construction, because it is all-pairs.
+
+So when you double the context, you do not double the work. Each token now has
+twice as many partners to score, and there are twice as many tokens doing the
+scoring: 2N tokens × 2N tokens = 4N². **Doubling the context quadruples the
+cost.** That ×4-per-doubling is the engine behind every number on this page.
+
+Drag the context length below. Watch the dot-product count and the memory for
+the score matrix climb as N², and notice that on the bar chart almost the entire
+cost sits in the largest window — everything smaller is a sliver. Then compare
+the three attention masks to see exactly what you buy by *not* computing the
+whole matrix.
+
+<VizFrame
+  label="Quadratic cost explorer"
+  caption="Drag context length from 1K to 128K and watch N² dot products and the fp16 score-matrix memory grow — each doubling is a ×4 jump, so the bars below the top are nearly invisible. The three grids are attention masks on a shared 22-token context: dense computes every visible (lower-triangle) cell; sliding-window keeps only recent tokens; sparse keeps recent + a few global + every Nth. The shaded-cell count is the cost; the 'loses' line is the price of that saving."
+>
+  <ContextCostExplorer client:visible />
+</VizFrame>
+
+The dense grid fills the entire causal triangle — that is the N² wall. Sliding
+window keeps only a fixed band near the diagonal, so its cost grows like N·w
+(linear), but a query can no longer reach a token more than `w` steps back.
+Sparse attention keeps the recent band, a few always-on "global" tokens, and a
+strided sample of the rest — near-linear cost that *approximates* long-range
+links instead of computing them exactly. Sparsity is never free; you are trading
+reach for scale.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="The ×4 table, with real counts and real bytes">
+
+Take N² literally. Using 1K = 1,000 tokens for round figures, here is the
+dot-product count per layer per head, and the memory to hold the N×N score
+matrix in fp16 (2 bytes per score):
+
+| context N | dot products (N²) | fp16 score matrix | vs previous |
+| --- | --- | --- | --- |
+| 4K (4,000) | **16M** | 32 MB | — |
+| 8K | **64M** | 128 MB | **×4** |
+| 16K | 256M | 512 MB | ×4 |
+| 32K | **1.0B** | 2.0 GB | ×4 |
+| 64K | 4.1B | 8.2 GB | ×4 |
+| 128K | **16B** | 33 GB | ×4 |
+
+Every step down the table is one doubling of context and a **×4** in both
+columns. Going from 4K to 128K is a 32× longer prompt but a **1,024×** heavier
+attention matrix. And that 33 GB at 128K is for *one* head in *one* layer — a
+real model stacks dozens of layers × dozens of heads on top of it.
+
+The arithmetic is a two-line loop — there is no hidden complexity, just `N*N`:
+
+```python
+BYTES_FP16 = 2                              # one attention score, half precision
+prev = None
+for k in (4, 8, 16, 32, 64, 128):
+    n = k * 1000
+    dots = n * n                            # attention scores, per layer per head
+    mem  = dots * BYTES_FP16                # bytes for the N×N fp16 matrix
+    mult = "" if prev is None else f"  ×{dots // prev}"
+    print(f"{k:>4}K  {dots/1e6:>9,.0f}M dots  {mem/1e9:6.2f} GB{mult}")
+    prev = dots
+
+#    4K       16M dots    0.03 GB
+#    8K       64M dots    0.13 GB  ×4
+#   16K      256M dots    0.51 GB  ×4
+#   32K    1,024M dots    2.05 GB  ×4
+#   64K    4,096M dots    8.19 GB  ×4
+#  128K   16,384M dots   32.77 GB  ×4
+```
+
+This is why 128K context costs far more than 32× a 4K request: the attention
+term grew 1,024×, and it is that term — not the linear-in-N parts of the
+network — that decides where the window has to stop.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="VRAM is the wall, and sparsity has a bill of its own">
+
+- **You run out of VRAM before you run out of compute.** The common guess is
+  that long context makes the model "CPU-bound." It doesn't — the GPU's memory
+  fills first. The N×N score matrix (and the activations around it) have to live
+  in VRAM, and at 128K a single head's matrix is already tens of GB. Memory is
+  the hard wall; the GPU is starved for space long before it is starved for math.
+- **Flash attention is how the wall gets pushed back — not by changing the
+  math.** A model reaches 128K not with a different attention formula but by
+  *never materializing* the full N×N matrix: flash attention computes it in tiles
+  and recomputes on the fly, turning O(N²) memory into roughly O(N) memory (the
+  compute stays N²). The window grows because the *memory* term was tamed.
+- **The KV cache grows with every token, forever.** During generation the model
+  caches the key and value vectors of every past token so it doesn't recompute
+  them. That cache is linear in N — but at 128K it is still gigabytes, and it
+  only grows as the conversation continues. Long sessions die from KV-cache
+  memory even when flash attention has handled the score matrix.
+- **Sliding-window and sparse attention scale, but drop long-range links.**
+  Restrict each token to a local band and cost becomes linear — but the model
+  literally cannot connect a fact on page 1 to a question on page 50. The
+  long-range dependency isn't approximated; for a pure sliding window it is gone.
+- **Coherence collapses when a document is truncated mid-stream.** Overflow the
+  window and the oldest tokens silently fall off. The model keeps generating
+  fluently, but it is now reasoning over a document whose opening — definitions,
+  constraints, the actual question — has vanished. The output stays grammatical
+  and goes quietly wrong. This is exactly the failure [RAG](/topics/rag) exists
+  to avoid: retrieve the few relevant chunks instead of stuffing the whole corpus
+  into a budget it can't fit.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why is attention quadratic in context length, not linear?">
+Because it is an all-pairs operation. Each of the N tokens produces a query that
+is compared — via a dot product — against the key of every one of the N tokens it
+can see. That's N × N = N² dot products, forming a full N×N score matrix, and it
+recurs in every layer and every head. There is no way to get the exact result
+without scoring every pair, so the work is N², not N. Doubling N gives twice as
+many queries each scoring twice as many keys → ×4.
+</Drill>
+
+<Drill q="A 128K prompt — what runs out first, compute or memory?">
+Memory, specifically GPU VRAM. The N×N score matrix and its activations have to
+be held on the device, and N² memory blows past the card's capacity before the
+N² math becomes the binding constraint. The popular "it becomes CPU-bound" answer
+is wrong twice over: it's the GPU, not the CPU, and it's the memory limit, not
+the compute limit, that you hit first. That's precisely why flash attention —
+which attacks the *memory* term by never storing the full matrix — is what
+unlocked long context.
+</Drill>
+
+<Drill q="How does a model reach 128K without changing the attention math?">
+By attacking memory and engineering, not the formula. Flash attention computes
+the N×N matrix in tiles and recomputes instead of storing it, collapsing O(N²)
+memory to ~O(N) while keeping the O(N²) compute. KV caching avoids recomputing
+past keys/values during generation. Add bigger/more GPUs and the result is a
+128K window running the *same* softmax-of-scaled-dot-products from the
+[attention](/topics/attention) lesson — just with the memory bottleneck
+engineered away. The quadratic compute is still there; it's been made affordable,
+not eliminated.
+</Drill>
+
+<Drill q="What does sliding-window attention trade away to get linear cost?">
+Exact long-range dependencies. By restricting each query to the last `w` tokens,
+cost drops from N² to about N·w (linear), but any token farther back than `w` is
+invisible — the model cannot directly link the start of a long document to its
+end. Sparse schemes (global tokens + strided/dilated attention) claw some of that
+reach back by keeping a few always-visible and periodic tokens, but they
+*approximate* the full attention pattern rather than compute it. The saving is
+real; so is the lost reach.
+</Drill>
+
+<Drill q="Why does an out-of-domain document eat your context budget faster?">
+Because the budget is denominated in [tokens](/topics/tokenization), and
+tokenization is tuned for common (mostly English) text. A rare language, code, or
+an unusual script shatters into many more subword tokens per character — often
+3–5× more — so the *same* amount of information consumes far more of the window.
+You hit the N-token wall sooner, and because cost is N², the tokens you do spend
+are quadratically expensive. Out-of-domain input is taxed twice: more tokens, and
+each token in a bigger N².
+</Drill>
+
+<Drill q="If the score matrix is N², why is the KV cache only linear — and why does it still cause failures?">
+Two different objects. The N×N score matrix is the all-pairs comparison computed
+inside one forward pass; it's quadratic and is what flash attention avoids
+materializing. The KV cache stores the key and value vectors of each past token
+so generation doesn't recompute them — that's N tokens × a fixed vector size, so
+it's linear in N. Linear still isn't small: at 128K across many layers and heads
+it's gigabytes, and it grows with every token generated. Long chat sessions
+routinely die from KV-cache memory even when the score matrix was never the
+problem.
+</Drill>
+
+</Section>
