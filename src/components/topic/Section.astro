@@ -1,0 +1,29 @@
+---
+// One of the five standard topic sections. The number + label make the page
+// scannable: you always know where "What breaks" lives.
+interface Props {
+  n: number;
+  title: string;
+  /** Optional one-line descriptor under the heading. */
+  tag?: string;
+  id?: string;
+}
+const { n, title, tag, id } = Astro.props;
+const anchor = id ?? title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+---
+
+<section id={anchor} class="scroll-mt-20 border-t border-line py-10 first:border-t-0">
+  <div class="mb-5 flex items-baseline gap-3">
+    <span
+      class="font-mono text-xs font-semibold tabular text-fg-faint"
+      aria-hidden="true">{String(n).padStart(2, '0')}</span
+    >
+    <div>
+      <h2 class="text-xl font-semibold tracking-tight">{title}</h2>
+      {tag && <p class="mt-0.5 text-sm text-fg-muted">{tag}</p>}
+    </div>
+  </div>
+  <div class="prose-tech">
+    <slot />
+  </div>
+</section>

@@ -1,0 +1,27 @@
+---
+// Frame for an interactive visualization island. Gives every "mechanic" a
+// consistent label bar + caption so the page reads like an instrument panel.
+interface Props {
+  label: string;
+  caption?: string;
+}
+const { label, caption } = Astro.props;
+---
+
+<figure class="my-6 overflow-hidden rounded-xl2 border border-line bg-ink-800">
+  <figcaption
+    class="flex items-center gap-2 border-b border-line bg-ink-700/50 px-4 py-2 text-2xs font-medium uppercase tracking-wider text-fg-faint"
+  >
+    <span class="h-1.5 w-1.5 rounded-full bg-live shadow-[0_0_8px] shadow-live/60"></span>
+    {label}
+    <span class="ml-auto font-mono normal-case tracking-normal text-fg-faint/70">interactive</span>
+  </figcaption>
+  <div class="p-4 sm:p-5">
+    <slot />
+  </div>
+  {
+    caption && (
+      <p class="border-t border-line px-4 py-2.5 text-xs text-fg-muted">{caption}</p>
+    )
+  }
+</figure>

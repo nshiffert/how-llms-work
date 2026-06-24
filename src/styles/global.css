@@ -1,0 +1,120 @@
+@import '@fontsource-variable/inter';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/700.css';
+@import 'katex/dist/katex.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --cat-basics: #6ea8fe;
+    --cat-finetune: #b692f6;
+    --cat-generation: #f5a85e;
+    --cat-advanced: #5ee3a1;
+    --cat-math: #f57e9c;
+  }
+
+  html {
+    @apply bg-ink-900 text-fg antialiased;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply font-sans;
+    font-feature-settings: 'cv05', 'cv08', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: rgba(110, 168, 254, 0.28);
+  }
+
+  /* Focus ring — keyboard only, technical look. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/70 ring-offset-2 ring-offset-ink-900 rounded-sm;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-sans font-semibold tracking-tight text-fg;
+    text-wrap: balance;
+  }
+
+  a {
+    @apply text-accent no-underline transition-colors;
+  }
+  a:hover {
+    @apply text-accent-hover;
+  }
+}
+
+@layer components {
+  /* Reading column for prose inside MDX */
+  .prose-tech {
+    @apply text-fg/90 leading-relaxed;
+  }
+  .prose-tech p {
+    @apply my-4;
+  }
+  .prose-tech strong {
+    @apply text-fg font-semibold;
+  }
+  .prose-tech ul {
+    @apply my-4 list-disc space-y-1.5 pl-5 marker:text-fg-faint;
+  }
+  .prose-tech ol {
+    @apply my-4 list-decimal space-y-1.5 pl-5 marker:text-fg-faint;
+  }
+  .prose-tech code:not(pre code) {
+    @apply rounded bg-ink-600 px-1.5 py-0.5 font-mono text-[0.85em] text-live;
+  }
+  .prose-tech a {
+    @apply underline decoration-accent/30 underline-offset-2 hover:decoration-accent;
+  }
+
+  /* Shiki code blocks emitted by Astro markdown */
+  .prose-tech pre,
+  .code-block pre {
+    @apply my-5 overflow-x-auto rounded-xl2 border border-line bg-ink-800/80 p-4 text-[0.84rem] leading-relaxed;
+  }
+  .prose-tech pre code {
+    @apply font-mono;
+  }
+
+  /* A labeled chip used across the site (category tags, status). */
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-2xs font-medium uppercase tracking-wider text-fg-faint;
+  }
+
+  .card {
+    @apply rounded-xl2 border border-line bg-ink-700/60 transition-colors;
+  }
+
+  /* KaTeX tuning for dark bg */
+  .katex {
+    @apply text-fg;
+  }
+  .katex-display {
+    @apply my-5 overflow-x-auto overflow-y-hidden py-1;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  /* Subtle grid texture for hero / section backgrounds */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

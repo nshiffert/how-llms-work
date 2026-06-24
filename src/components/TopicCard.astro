@@ -1,0 +1,46 @@
+---
+import type { Topic } from '../data/topics';
+interface Props {
+  topic: Topic;
+}
+const { topic } = Astro.props;
+const ready = topic.status === 'ready';
+const Tag = ready ? 'a' : 'div';
+const href = ready ? `/topics/${topic.slug}` : undefined;
+---
+
+<Tag
+  href={href}
+  style={`--c: var(--cat-${topic.category})`}
+  class:list={[
+    'card group relative flex flex-col gap-2 p-4',
+    ready
+      ? 'hover:-translate-y-0.5 hover:border-[color:var(--c)]/50 hover:bg-ink-700'
+      : 'cursor-default opacity-55',
+  ]}
+>
+  <div class="flex items-center justify-between">
+    <h3
+      class:list={[
+        'text-sm font-semibold tracking-tight',
+        ready ? 'text-fg group-hover:text-[color:var(--c)]' : 'text-fg-muted',
+      ]}
+    >
+      {topic.title}
+    </h3>
+    {
+      ready ? (
+        <span class="font-mono text-fg-faint transition-transform group-hover:translate-x-0.5" aria-hidden="true">→</span>
+      ) : (
+        <span class="chip border-line/60 !px-2 !py-0 text-[0.6rem]">planned</span>
+      )
+    }
+  </div>
+
+  <p class="line-clamp-3 text-xs leading-relaxed text-fg-muted">{topic.hook}</p>
+
+  <div class="mt-auto flex items-center gap-1.5 pt-1 text-2xs text-fg-faint">
+    <span class="h-1 w-1 rounded-full" style="background: var(--c)"></span>
+    <span class="font-mono">{topic.viz}</span>
+  </div>
+</Tag>

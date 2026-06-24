@@ -1,0 +1,57 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import TopicCard from '../components/TopicCard.astro';
+import { CATEGORIES, TOPICS, topicsByCategory } from '../data/topics';
+
+const readyCount = TOPICS.filter((t) => t.status === 'ready').length;
+---
+
+<BaseLayout title="LLM Internals">
+  <!-- Hero -->
+  <section class="relative overflow-hidden border-b border-line bg-grid">
+    <div class="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-ink-900"></div>
+    <div class="relative mx-auto max-w-wide px-5 py-16 sm:py-20">
+      <p class="mb-3 font-mono text-2xs uppercase tracking-[0.2em] text-accent">
+        LLM mechanics · interactive
+      </p>
+      <h1 class="max-w-2xl text-balance text-4xl font-bold leading-[1.1] tracking-tight sm:text-5xl">
+        Learn how modern AI actually works.
+      </h1>
+      <p class="mt-5 max-w-prose text-lg leading-relaxed text-fg-muted">
+        From tokenization and attention to sampling, fine-tuning, RAG, and the
+        math underneath it all, each topic is visual, interactive, and concrete.
+        Work through the full set and you’ll understand these systems better than
+        most people calling themselves AI experts.
+      </p>
+      <div class="mt-7 flex flex-wrap items-center gap-4 text-sm text-fg-faint">
+        <span class="chip">
+          <span class="h-1.5 w-1.5 rounded-full bg-live"></span>
+          {readyCount} of {TOPICS.length} built
+        </span>
+        <span class="font-mono text-2xs">{CATEGORIES.length} categories · mechanics-first</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Topic grid, grouped by category -->
+  <div class="mx-auto max-w-wide px-5 py-12">
+    {
+      CATEGORIES.map((cat) => (
+        <section id={cat.id} class="scroll-mt-20 border-t border-line py-10 first:border-t-0 first:pt-2">
+          <div class="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div class="flex items-center gap-3">
+              <span class="h-3 w-3 rounded-sm" style={`background: var(--cat-${cat.id})`} />
+              <h2 class="text-lg font-semibold tracking-tight">{cat.label}</h2>
+            </div>
+            <p class="text-sm text-fg-muted">{cat.blurb}</p>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {topicsByCategory(cat.id).map((topic) => (
+              <TopicCard topic={topic} />
+            ))}
+          </div>
+        </section>
+      ))
+    }
+  </div>
+</BaseLayout>

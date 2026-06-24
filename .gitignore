@@ -1,0 +1,28 @@
+# build output
+dist/
+
+# astro generated types / cache
+.astro/
+
+# dependencies
+node_modules/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# environment & secrets (defensive — nothing secret lives in this repo,
+# but never let a token or env file slip in)
+.env
+.env.*
+.dev.vars
+*.token
+api_token
+account_id
+.wrangler/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

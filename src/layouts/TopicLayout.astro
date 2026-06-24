@@ -1,0 +1,46 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import CrossLinks from '../components/topic/CrossLinks.astro';
+import { CATEGORIES, type CategoryId } from '../data/topics';
+
+interface Props {
+  title: string;
+  category: CategoryId;
+  hook: string;
+  crossLinks?: string[];
+}
+const { title, category, hook, crossLinks = [] } = Astro.props;
+const cat = CATEGORIES.find((c) => c.id === category)!;
+---
+
+<BaseLayout title={title} description={hook}>
+  <article class="mx-auto max-w-[48rem] px-5 py-10">
+    <!-- Section 1: The hook — the only "header" content; opens the page. -->
+    <header class="mb-2">
+      <div class="mb-4 flex items-center gap-3 text-2xs">
+        <a
+          href={`/#${category}`}
+          class="chip hover:border-[color:var(--c)] hover:text-fg"
+          style={`--c: var(--cat-${category})`}
+        >
+          <span class="h-1.5 w-1.5 rounded-full" style={`background: var(--cat-${category})`}></span>
+          {cat.label}
+        </a>
+      </div>
+      <h1 class="text-3xl font-bold tracking-tight sm:text-4xl">{title}</h1>
+      <p class="mt-4 border-l-2 pl-4 text-lg leading-relaxed text-fg-muted" style={`border-color: var(--cat-${category})`}>
+        {hook}
+      </p>
+    </header>
+
+    <!-- Sections 2–6 come from the MDX body. -->
+    <slot />
+
+    <CrossLinks slugs={crossLinks} />
+
+    <nav class="mt-8 flex justify-between border-t border-line pt-6 text-sm">
+      <a href="/" class="text-fg-muted hover:text-fg">← All topics</a>
+      <a href="/interview-drills" class="text-fg-muted hover:text-fg">Interview drills →</a>
+    </nav>
+  </article>
+</BaseLayout>

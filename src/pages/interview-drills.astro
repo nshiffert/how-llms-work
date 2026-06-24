@@ -1,0 +1,38 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { TOPICS } from '../data/topics';
+const ready = TOPICS.filter((t) => t.status === 'ready');
+---
+
+<BaseLayout title="Interview Drills">
+  <div class="mx-auto max-w-prose px-5 py-12">
+    <h1 class="text-3xl font-bold tracking-tight">Interview Drills</h1>
+    <p class="mt-4 text-lg text-fg-muted">
+      A mixed deck pulling the "pressure test" questions from every topic page,
+      shuffled, phrased the way an interviewer would.
+    </p>
+    <div class="card mt-8 flex items-center gap-3 p-5 text-sm text-fg-muted">
+      <span class="chip">Phase 4</span>
+      Aggregates the per-topic Q&amp;A into one flashcard run. For now the
+      questions live on each topic page — {ready.length} topic
+      {ready.length === 1 ? 'has' : 'have'} a pressure-test section so far.
+    </div>
+
+    {
+      ready.length > 0 && (
+        <ul class="mt-6 space-y-2">
+          {ready.map((t) => (
+            <li>
+              <a
+                href={`/topics/${t.slug}#interview-pressure-test`}
+                class="text-sm text-fg-muted underline decoration-line underline-offset-2 hover:text-fg hover:decoration-accent"
+              >
+                {t.title} → pressure test
+              </a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </div>
+</BaseLayout>

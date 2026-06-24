@@ -1,0 +1,29 @@
+---
+// A single interview flashcard. Pure <details> so it works with zero JS and
+// doubles as a print-friendly study card. Question in the summary, answer hidden.
+interface Props {
+  q: string;
+}
+const { q } = Astro.props;
+---
+
+<details
+  class="group rounded-xl2 border border-line bg-ink-700/50 px-4 py-3 transition-colors hover:border-line open:border-accent/30 open:bg-ink-700"
+>
+  <summary
+    class="flex cursor-pointer list-none items-start gap-3 text-sm font-medium text-fg [&::-webkit-details-marker]:hidden"
+  >
+    <span
+      class="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border border-line text-fg-faint transition-transform group-open:rotate-90 group-open:border-accent/40 group-open:text-accent"
+      aria-hidden="true"
+    >
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </span>
+    <span>{q}</span>
+  </summary>
+  <div class="prose-tech mt-3 border-t border-line pt-3 pl-8 text-sm text-fg-muted">
+    <slot />
+  </div>
+</details>

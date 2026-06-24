@@ -1,0 +1,224 @@
+---
+title: Tokenization
+category: basics
+hook: Models never see text — they see integer ids carved out by a merge algorithm that ran once, long before you typed anything.
+crossLinks:
+  - embeddings
+  - vocabulary-handling
+  - context-window
+  - attention
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import BpeAnimator from '../../components/islands/BpeAnimator.tsx';
+import RealTokenizer from '../../components/islands/RealTokenizer.tsx';
+
+<Section n={1} title="What tokenization is" tag="The problem it solves, and the one-line definition">
+
+A neural network does arithmetic on vectors of floating-point numbers. Text is
+none of those things. Tokenization is the bridge: it chops a string into a
+sequence of **tokens** — chunks drawn from a fixed vocabulary — and maps each
+token to an integer id. That id is what indexes into the embedding table; from
+there on the model only ever sees numbers.
+
+The hard choice is the **granularity** of the chunks. Split into whole **words**
+and the vocabulary is huge and still misses anything it never saw in training
+(every typo, name, or new word is out-of-vocabulary). Split into single
+**characters** and you never have OOV, but a sentence becomes hundreds of tokens
+and the model has to learn spelling before it can learn meaning. Modern LLMs sit
+in between, on **subwords**: common words stay whole, rare words break into
+reusable pieces, and *nothing is ever OOV* because the fallback is always the
+individual bytes.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Tokenization maps a
+  string to a sequence of integer ids over a fixed vocabulary. The vocabulary is
+  <em>learned once</em> from a training corpus — most commonly by
+  <strong>byte-pair encoding (BPE)</strong>, which greedily merges the most
+  frequent adjacent pair of symbols, over and over, until it hits a target size.
+</div>
+
+The mechanic below is the training half — how the vocabulary gets built. The
+second view is the inference half — that finished vocabulary applied to your
+text, using GPT-4o's actual tokenizer.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Count pairs → merge the most frequent → repeat">
+
+BPE starts with every word split into raw characters plus an end-of-word marker
+(the faint `·`). It counts every adjacent pair across the whole corpus, merges
+the single most frequent pair into a new symbol everywhere it appears, adds that
+symbol to the vocabulary, and scans again. Each merge is one new vocabulary
+entry. Step through it:
+
+<VizFrame
+  label="BPE merge trainer"
+  caption="Press Step to perform one merge. The left panel is the corpus, each word shown as its current tokens; the bar chart is the live pair-frequency count that decides the next merge; the vocabulary and the ordered merge rules grow on the right. Edit the corpus to train on your own text."
+>
+  <BpeAnimator client:visible />
+</VizFrame>
+
+At inference time the model does **not** recount anything. It just replays the
+saved merge rules, in the order they were learned, against your text. Here is
+that finished vocabulary — `o200k_base`, the real GPT-4o tokenizer — running in
+your browser:
+
+<VizFrame
+  label="GPT-4o tokenizer · o200k_base"
+  caption="Every shaded box is one real token. Watch the chars-per-token ratio move as you switch presets — English ≈ 4 chars/token, code and non-Latin scripts far less. That ratio is exactly what your context window and API bill are spent in."
+>
+  <RealTokenizer client:only="react" />
+</VizFrame>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="The first merge, with real counts">
+
+Train on the toy corpus `low×5  lowest×2  newer×6  wider×3  new×2`. Split into
+characters with end markers, then count every adjacent pair. The top of that
+count is:
+
+| pair | comes from | count |
+| --- | --- | --- |
+| `e r` | newer (6) + wider (3) | **9** |
+| `r ·` | newer (6) + wider (3) | 9 |
+| `w e` | lowest (2) + newer (6) | 8 |
+| `n e` | newer (6) + new (2) | 8 |
+| `l o` | low (5) + lowest (2) | 7 |
+
+`e r` and `r ·` tie at 9; BPE breaks the tie deterministically (first pair seen),
+so **merge 1 is `e + r → er`**. Now `newer` is `n e w er ·` and `wider` is
+`w i d er ·`, and the next scan runs on the updated symbols. That greedy loop is
+the entire algorithm:
+
+```python
+from collections import Counter
+
+# word -> frequency; each word is a tuple of symbols + an end-of-word marker
+vocab = {("l","o","w","</w>"): 5, ("l","o","w","e","s","t","</w>"): 2,
+         ("n","e","w","e","r","</w>"): 6, ("w","i","d","e","r","</w>"): 3,
+         ("n","e","w","</w>"): 2}
+
+def pair_counts(vocab):
+    pairs = Counter()
+    for word, freq in vocab.items():
+        for a, b in zip(word, word[1:]):
+            pairs[(a, b)] += freq
+    return pairs
+
+def merge(vocab, a, b):
+    out = {}
+    for word, freq in vocab.items():
+        w, i = [], 0
+        while i < len(word):
+            if i < len(word) - 1 and word[i] == a and word[i+1] == b:
+                w.append(a + b); i += 2
+            else:
+                w.append(word[i]); i += 1
+        out[tuple(w)] = freq
+    return out
+
+for step in range(10):
+    pairs = pair_counts(vocab)
+    if not pairs or max(pairs.values()) < 2:
+        break
+    (a, b), n = pairs.most_common(1)[0]    # step 0 -> ('e','r'), 9
+    vocab = merge(vocab, a, b)
+```
+
+Applying the trained vocab is the cheap part — `tiktoken` just looks up ids:
+
+```python
+import tiktoken
+enc = tiktoken.get_encoding("o200k_base")     # GPT-4o
+
+enc.encode("tokenization")   # [10346, 2860]          -> "token" + "ization"
+enc.encode("strawberry")     # [302, 1618, 19772]     -> "st" + "raw" + "berry"
+enc.encode(" strawberry")    # [101830]               -> ONE token (leading space)
+enc.encode("1234")           # [7633, 19]             -> "123" + "4"
+```
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Where the abstraction leaks">
+
+The model reasons over tokens, not letters — so anything below the token
+boundary is invisible to it, and that is the source of a whole family of
+failures.
+
+- **Character-level tasks fall apart.** `strawberry` is the three tokens
+  `st·raw·berry`. The model never sees the letters, so "how many r's are in
+  strawberry?" is genuinely hard — it is counting things it cannot see. Same
+  reason it struggles to reverse strings or spell words backward.
+- **Arithmetic is fragile.** Numbers split on inconsistent boundaries: `1234`
+  becomes `123·4`. Two numbers that look similar can tokenize completely
+  differently, so digit-aligned arithmetic has to be reconstructed from a ragged
+  chunking it never asked for.
+- **The space is part of the token.** `strawberry` is 3 tokens but ` strawberry`
+  (leading space) is **1**. A trailing space in your prompt can silently change
+  the whole continuation, because you have handed the model a different token
+  sequence than you think.
+- **Non-English pays a tax.** The same sentence in Japanese or Hindi can cost
+  3–5× the tokens of its English version. That is higher latency, higher cost,
+  and less content fitting in the context window — a structural disadvantage
+  baked into the vocabulary.
+- **Glitch tokens.** A string that appeared in the *tokenizer's* corpus but
+  almost never in the *model's* training data (the infamous
+  `SolidGoldMagikarp`) becomes a single token whose embedding is essentially
+  untrained — feeding it produces bizarre, unhinged output.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why subwords? Argue against both word-level and character-level tokenization.">
+Word-level: the vocabulary is enormous and still suffers out-of-vocabulary
+failures — any unseen word, name, or typo has no id. Character-level: no OOV, but
+sequences get 4–5× longer, which quadratically inflates attention cost and forces
+the model to spend capacity learning spelling before semantics. Subword BPE is
+the compromise: frequent words stay as one token, rare words decompose into
+known pieces, and because the ultimate fallback is bytes, nothing is ever OOV.
+</Drill>
+
+<Drill q="BPE merges the most frequent pair greedily. What's the failure mode of that greediness, and what's the alternative?">
+Greedy frequency-based merging is locally optimal, not globally — it can lock in
+merges that aren't the best segmentation for the language as a whole, and it
+gives exactly one deterministic segmentation per string. The Unigram LM
+tokenizer (SentencePiece) instead starts from a large vocabulary and prunes it to
+maximize corpus likelihood under a probabilistic model, which can represent
+multiple segmentations and enables subword regularization (sampling
+segmentations during training). WordPiece is a middle ground: it merges by
+likelihood gain rather than raw frequency.
+</Drill>
+
+<Drill q="Why is GPT-2 onward 'byte-level' BPE, and what problem does that solve?">
+It runs BPE over UTF-8 *bytes* rather than Unicode characters. The base
+vocabulary is then just the 256 possible byte values, which guarantees that any
+possible string — any language, emoji, control character, or corrupted input —
+is representable with zero OOV, without needing an explicit `<unk>` token. The
+trade-off is that one non-Latin character may span several byte tokens, which is
+part of why those languages cost more tokens.
+</Drill>
+
+<Drill q="A user reports the model can't count the letters in a word. Is that a reasoning failure?">
+No — it's a representation failure upstream of reasoning. The model receives the
+word as a few subword token ids; the individual characters were discarded at the
+input boundary, so the information needed to count them isn't present. It's not
+that the model reasons badly about the letters; it never sees them. Fixes live at
+the tokenization layer (character or byte fallback) or by giving the model a tool,
+not by prompting it to "think harder."
+</Drill>
+
+<Drill q="Why can a trailing space in a prompt change the output, and what does that tell you about prompting?">
+Tokens absorb leading whitespace, so `"...the"` and `"...the "` end in different
+tokens and present a different sequence to the model — the conditional
+distribution over the next token genuinely changes. Practically: keep prompt
+boundaries clean, don't end a prompt with a dangling space unless you mean to,
+and remember that "the same text" to a human can be a different token sequence to
+the model.
+</Drill>
+
+</Section>

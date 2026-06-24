@@ -1,0 +1,46 @@
+---
+const { pathname } = Astro.url;
+const nav = [
+  { href: '/', label: 'Topics' },
+  { href: '/glossary', label: 'Glossary' },
+  { href: '/interview-drills', label: 'Drills' },
+];
+const isActive = (href: string) =>
+  href === '/' ? pathname === '/' : pathname.startsWith(href);
+---
+
+<header
+  class="sticky top-0 z-40 border-b border-line bg-ink-900/80 backdrop-blur supports-[backdrop-filter]:bg-ink-900/60"
+>
+  <div class="mx-auto flex h-14 max-w-wide items-center justify-between px-5">
+    <a href="/" class="group flex items-center gap-2.5 text-fg hover:text-fg">
+      <span
+        class="grid h-7 w-7 place-items-center rounded-lg border border-line bg-ink-700 font-mono text-[0.7rem] font-bold text-accent transition-colors group-hover:border-accent/50"
+        aria-hidden="true">∑</span
+      >
+      <span class="flex flex-col leading-none">
+        <span class="text-sm font-semibold tracking-tight">LLM Internals</span>
+        <span class="text-2xs text-fg-faint">a learning center</span>
+      </span>
+    </a>
+
+    <nav class="flex items-center gap-1 text-sm">
+      {
+        nav.map((item) => (
+          <a
+            href={item.href}
+            aria-current={isActive(item.href) ? 'page' : undefined}
+            class:list={[
+              'rounded-md px-3 py-1.5 transition-colors',
+              isActive(item.href)
+                ? 'bg-ink-700 text-fg'
+                : 'text-fg-muted hover:bg-ink-700/60 hover:text-fg',
+            ]}
+          >
+            {item.label}
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+</header>

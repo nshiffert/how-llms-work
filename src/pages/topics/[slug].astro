@@ -1,0 +1,24 @@
+---
+import { getCollection, render } from 'astro:content';
+import TopicLayout from '../../layouts/TopicLayout.astro';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('topics', ({ data }) => !data.draft);
+  return entries.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+---
+
+<TopicLayout
+  title={entry.data.title}
+  category={entry.data.category}
+  hook={entry.data.hook}
+  crossLinks={entry.data.crossLinks}
+>
+  <Content />
+</TopicLayout>

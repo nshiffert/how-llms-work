@@ -1,0 +1,166 @@
+---
+title: Attention
+category: basics
+hook: Every token rewrites itself as a weighted blend of the tokens it decides are relevant — and the weights are nothing more than scaled dot products pushed through a softmax.
+crossLinks:
+  - softmax
+  - positional-encoding
+  - context-window
+  - mixture-of-experts
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import SoftmaxBars from '../../components/islands/SoftmaxBars.tsx';
+
+<Section n={1} title="What attention is" tag="The problem it solves, and the one-line definition">
+
+A token's meaning is not fixed — it depends on the tokens around it. In *"The
+animal didn't cross the street because it was too tired,"* the word **it** refers
+to the animal, and the model can only know that if the vector for **it** is
+allowed to pull information from **animal**, seven tokens back. Attention is the
+mechanism that moves that information. It lets every token gather context from
+every other token in a single step, instead of passing it hand-to-hand down a
+chain the way an RNN does.
+
+Concretely, attention takes a sequence of token vectors and returns a new
+sequence **of the same shape**, where each output vector is a weighted average
+of information drawn from the whole sequence. The weights are not fixed weights
+you train once — they are recomputed for every token, in every layer, **from the
+content itself**. A token that needs its subject attends to the subject; the
+next token may attend somewhere else entirely.
+
+To decide those weights, each token is linearly projected into three vectors:
+
+- a **query** — what *this* token is looking for,
+- a **key** — what each token advertises as a match,
+- a **value** — the information each token hands over if it is selected.
+
+Relevance between two tokens is the dot product of one's query with the other's
+key. The output for a token is the sum of every value, weighted by that
+relevance.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Attention maps a
+  <em>query</em> and a set of <em>key–value</em> pairs to an output, computed as a
+  weighted sum of the values, where each weight is the compatibility — a scaled
+  dot product — of the query with the corresponding key.
+</div>
+
+This is the core operation of the transformer. The case shown here, where the
+queries, keys, and values all come from the same sequence, is **self-attention**
+— it is what replaced recurrence and lets the model connect any two positions
+with a constant path length, fully in parallel. Everything below traces a single
+attention *head*; real models run many heads at once and stack the result across
+dozens of layers.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Q/K/V → Q·K → scale by √d → softmax → weighted sum of V">
+
+Once every token has been projected into its query, key, and value (step 1
+above), attention scores each pair in four more steps: take the dot product
+$q \cdot k_j$ (2), divide by $\sqrt{d_k}$ (3), softmax the resulting scores into
+weights (4), then sum the value vectors weighted by those scores (5).
+
+$$
+\mathrm{Attention}(Q, K, V) = \mathrm{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_k}}\right) V
+$$
+
+The softmax in step 4 is the part that does the deciding — it converts raw
+compatibility scores into a probability distribution over which tokens to read
+from. Drag the temperature below to feel how that distribution sharpens or
+flattens.
+
+<VizFrame
+  label="Softmax over attention scores"
+  caption="Placeholder for the Phase 2 mechanic. The full build animates Q/K/V generation, the cell-by-cell dot product, the √d scaling, and the weighted sum of V — with a token picker and a heatmap. This slice is the softmax step, live."
+>
+  <SoftmaxBars client:visible />
+</VizFrame>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="One query, three keys, real numbers">
+
+Say the current token's query produces these scaled scores against three earlier
+tokens: `[5.0, 2.0, 1.0]`. Exponentiate, normalize, and you get the attention
+weights — almost all the mass lands on the first token.
+
+| step | token A | token B | token C |
+| --- | --- | --- | --- |
+| score $q\cdot k/\sqrt d$ | 5.0 | 2.0 | 1.0 |
+| $e^{\text{score}}$ | 148.4 | 7.39 | 2.72 |
+| weight (softmax) | **0.936** | 0.047 | 0.017 |
+
+The output vector is `0.936·v_A + 0.047·v_B + 0.017·v_C` — overwhelmingly a copy
+of A's value, lightly tinted by B and C.
+
+```python
+import torch, torch.nn.functional as F
+
+q = torch.tensor([1.0, 0.0, 1.0])              # query for current token
+K = torch.tensor([[1.0, 0.0, 4.0],             # keys for A, B, C
+                  [0.0, 1.0, 2.0],
+                  [1.0, 1.0, 0.0]])
+V = torch.tensor([[10.,  0.], [0., 10.], [5., 5.]])
+
+scores = (K @ q) / (q.shape[-1] ** 0.5)        # tensor([2.89, 1.15, 0.58])
+weights = F.softmax(scores, dim=-1)            # tensor([0.78, 0.14, 0.08])
+out = weights @ V                              # tensor([8.2, 1.8])
+```
+
+</Section>
+
+<Section n={4} title="What breaks" tag="The failure mode that makes the √d matter">
+
+Drop the `/√d` scaling and attention quietly dies as models get wider. With
+large $d_k$, dot products grow proportional to $\sqrt{d_k}$, so the score
+spread blows up — the softmax saturates, putting ~1.0 on a single token and ~0
+everywhere else. A saturated softmax has a near-zero gradient, so the attention
+layer stops learning where to look. The `√d` divisor keeps the variance of the
+scores around 1 regardless of model width, which is the whole reason it is there
+— not aesthetics, numerical survival.
+
+The second failure mode is cost: scores are an all-pairs operation, so memory
+and FLOPs scale with the **square** of sequence length. That is the wall the
+context-window page is about.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why divide by √d_k and not d_k, or nothing at all?">
+Dot products of two random vectors with unit-variance components have variance
+proportional to `d_k`, so their standard deviation grows like `√d_k`. Dividing
+by `√d_k` renormalizes the score variance back to ~1, keeping the softmax in its
+responsive (non-saturated) regime. Dividing by `d_k` would over-shrink and wash
+out real differences; dividing by nothing lets the softmax saturate and kill the
+gradient as width grows.
+</Drill>
+
+<Drill q="Q, K, and V are all linear projections of the same input. Why have three separate matrices instead of one?">
+They decouple three different roles: the query is "what am I looking for," the
+key is "what do I offer as a match," and the value is "what I actually
+contribute if matched." Tying them would force the matching subspace to equal
+the content subspace, which is strictly less expressive. The projections are
+also what make multi-head attention work — each head gets its own Q/K/V
+subspace.
+</Drill>
+
+<Drill q="What is the causal mask doing, and at which step?">
+In a decoder, you mask the score matrix *before* the softmax by setting all
+future positions to −∞, so their exponentials become 0 and they receive zero
+weight. It has to happen pre-softmax — masking after softmax would leave nonzero
+leakage and the weights would no longer sum to 1 over the visible tokens.
+</Drill>
+
+<Drill q="Attention is permutation-equivariant. Why is that a problem, and how is it fixed?">
+With no positional signal, shuffling the input tokens just shuffles the outputs
+identically — the mechanism can't tell "dog bites man" from "man bites dog."
+Position is injected separately (sinusoidal/learned additive encodings, or RoPE
+rotations on Q and K) so order becomes part of the representation.
+</Drill>
+
+</Section>
