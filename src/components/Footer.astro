@@ -3,14 +3,29 @@
 
 <footer class="mt-20 border-t border-line">
   <div
-    class="mx-auto flex max-w-wide flex-col gap-2 px-5 py-8 text-2xs text-fg-faint sm:flex-row sm:items-center sm:justify-between"
+    class="mx-auto flex max-w-wide flex-col gap-4 px-5 py-8 text-2xs text-fg-faint sm:flex-row sm:items-center sm:justify-between"
   >
-    <p>
+    <p class="max-w-md">
       A personal study tool for transformer internals. Mechanics first,
       metaphors second.
     </p>
-    <p class="font-mono">
-      static build · no runtime · {new Date().getFullYear()}
-    </p>
+    <div class="flex flex-wrap items-center gap-5">
+      <a
+        href="https://therightspeed.co"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="group inline-flex items-center gap-2"
+      >
+        <span class="font-mono">built by</span>
+        <img
+          src="/rightspeed-logo.png"
+          alt="Rightspeed"
+          class="h-5 w-auto opacity-80 transition-opacity group-hover:opacity-100"
+        />
+      </a>
+      <p class="font-mono">
+        static build · no runtime · {new Date().getFullYear()}
+      </p>
+    </div>
   </div>
 </footer>

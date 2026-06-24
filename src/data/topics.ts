@@ -64,7 +64,7 @@ export const TOPICS: Topic[] = [
     hook: 'Models never see text — they see integer ids carved out by a merge algorithm that ran once, long before you typed anything.',
     category: 'basics',
     status: 'ready',
-    viz: 'Step-through BPE merge animator',
+    viz: 'Byte-pair encoding (BPE) merge animator',
   },
   {
     slug: 'attention',

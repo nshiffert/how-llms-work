@@ -1,0 +1,33 @@
+---
+// New-design (Space Grotesk / cyan-pink) site header. Single source of the
+// main nav so adding an item touches one place.
+const { pathname } = Astro.url;
+const items = [
+  { href: '/', label: 'Topics', active: pathname === '/' },
+  { href: '/audio-tutor', label: 'Audio Tutor', active: pathname.startsWith('/audio-tutor') },
+  { href: '/glossary', label: 'Glossary', active: pathname.startsWith('/glossary') },
+  { href: '/interview-drills', label: 'Drills', active: pathname.startsWith('/interview-drills') },
+];
+---
+
+<header
+  style="position:sticky;top:0;z-index:40;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px clamp(20px,5vw,56px);backdrop-filter:blur(12px);background:rgba(7,8,12,0.55);border-bottom:1px solid rgba(255,255,255,0.06)"
+>
+  <a href="/" style="text-decoration:none;display:flex;align-items:baseline;gap:10px;white-space:nowrap">
+    <span style="font-size:20px;font-weight:700;letter-spacing:-0.01em">∑ LLM Internals</span>
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7080;letter-spacing:0.04em">a learning center</span>
+  </a>
+  <nav style="display:flex;align-items:center;gap:clamp(16px,2.4vw,28px);font-family:'IBM Plex Mono',monospace;font-size:13px;flex-wrap:wrap;justify-content:flex-end">
+    {
+      items.map((it) => (
+        <a
+          href={it.href}
+          class={it.active ? undefined : 'hl-nav'}
+          style={`text-decoration:none;white-space:nowrap;color:${it.active ? '#e9ebf1' : '#9398a8'}`}
+        >
+          {it.label}
+        </a>
+      ))
+    }
+  </nav>
+</header>

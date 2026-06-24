@@ -1,0 +1,76 @@
+---
+import '@fontsource-variable/space-grotesk';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/500.css';
+import '@fontsource/ibm-plex-mono/600.css';
+import LandingHeader from '../components/landing/LandingHeader.astro';
+import LandingFooter from '../components/landing/LandingFooter.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+const {
+  title,
+  description = 'An interactive learning center for LLM and transformer internals. Mechanics first, metaphors second.',
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    <style is:global>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: #07080c;
+        color: #e9ebf1;
+        font-family: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+      a { color: inherit; }
+      ::selection { background: rgba(56, 217, 230, 0.25); }
+      @keyframes livepulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.78); } }
+      @keyframes drift { from { background-position: 0 0; } to { background-position: 38px 38px; } }
+
+      /* hover interactions (replacing the design's style-hover) */
+      .hl-nav { transition: color .15s; }
+      .hl-nav:hover { color: #e9ebf1; }
+      .hl-btn-primary { transition: transform .16s ease, box-shadow .16s ease; }
+      .hl-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 30px -8px rgba(56,217,230,0.5); }
+      .hl-btn-ghost { transition: border-color .16s ease, background .16s; }
+      .hl-btn-ghost:hover { border-color: rgba(255,255,255,0.32); background: rgba(255,255,255,0.03); }
+      .hl-featured { transition: transform .2s ease, border-color .2s ease; }
+      .hl-featured:hover { transform: translateY(-5px); border-color: var(--accent); }
+      .hl-card { transition: transform .18s ease, border-color .18s ease; }
+      .hl-card:hover { transform: translateY(-4px); border-color: rgba(56,217,230,0.5); }
+      .hl-card-planned { transition: border-color .18s ease; }
+      .hl-card-planned:hover { border-color: rgba(255,255,255,0.16); }
+      .hl-logo img { opacity: .82; transition: opacity .15s ease; }
+      .hl-logo:hover img { opacity: 1; }
+
+      /* stack the hero on small screens (design is desktop-only) */
+      @media (max-width: 820px) {
+        .hl-hero { grid-template-columns: 1fr !important; }
+        .hl-catrow { flex-wrap: wrap; }
+        .hl-catrow h3 { white-space: normal !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      style="position:relative;min-height:100vh;background:radial-gradient(1100px 560px at 72% -8%,rgba(56,217,230,0.13),transparent 58%),radial-gradient(900px 500px at 8% 12%,rgba(240,110,196,0.07),transparent 55%),#07080c;overflow:hidden"
+    >
+      <LandingHeader />
+      <slot />
+      <LandingFooter />
+    </div>
+  </body>
+</html>

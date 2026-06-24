@@ -48,14 +48,15 @@ text, using GPT-4o's actual tokenizer.
 
 <Section n={2} title="The mechanic" tag="Count pairs → merge the most frequent → repeat">
 
-BPE starts with every word split into raw characters plus an end-of-word marker
-(the faint `·`). It counts every adjacent pair across the whole corpus, merges
+Byte-pair encoding (BPE) starts with every word split into raw characters plus
+an end-of-word marker (the faint `·`). It counts every adjacent pair across the
+whole corpus, merges
 the single most frequent pair into a new symbol everywhere it appears, adds that
 symbol to the vocabulary, and scans again. Each merge is one new vocabulary
 entry. Step through it:
 
 <VizFrame
-  label="BPE merge trainer"
+  label="Byte-pair encoding (BPE) merge trainer"
   caption="Press Step to perform one merge. The left panel is the corpus, each word shown as its current tokens; the bar chart is the live pair-frequency count that decides the next merge; the vocabulary and the ordered merge rules grow on the right. Edit the corpus to train on your own text."
 >
   <BpeAnimator client:visible />
@@ -73,6 +74,21 @@ your browser:
   <RealTokenizer client:only="react" />
 </VizFrame>
 
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Why ~200,000 tokens?</span> The
+  <code>o200k_base</code> vocabulary GPT-4o uses holds roughly <strong>200,000
+  tokens</strong> — about double the ~100k of the older <code>cl100k_base</code>.
+  That size is thought to hit a sweet spot. A bigger vocabulary lets numbers,
+  common words, and non-Latin scripts claim their own tokens instead of
+  shattering: digits tokenize more consistently (<strong>better math
+  representation</strong>), and scripts like Chinese, Japanese, and Hindi cost
+  far fewer tokens than they used to (<strong>better cross-language support</strong>,
+  lower token tax). Going bigger isn't free — every token adds a row to the
+  embedding table and the final output softmax (vocabulary × model width) — so
+  ~200k is the current balance between shorter sequences and a layer that still
+  fits. That dial is exactly what the Vocabulary Handling topic is about.
+</div>
+
 </Section>
 
 <Section n={3} title="Worked example" tag="The first merge, with real counts">
@@ -89,7 +105,7 @@ count is:
 | `n e` | newer (6) + new (2) | 8 |
 | `l o` | low (5) + lowest (2) | 7 |
 
-`e r` and `r ·` tie at 9; BPE breaks the tie deterministically (first pair seen),
+`e r` and `r ·` tie at 9; byte-pair encoding (BPE) breaks the tie deterministically (first pair seen),
 so **merge 1 is `e + r → er`**. Now `newer` is `n e w er ·` and `wider` is
 `w i d er ·`, and the next scan runs on the updated symbols. That greedy loop is
 the entire algorithm:
@@ -178,12 +194,13 @@ failures.
 Word-level: the vocabulary is enormous and still suffers out-of-vocabulary
 failures — any unseen word, name, or typo has no id. Character-level: no OOV, but
 sequences get 4–5× longer, which quadratically inflates attention cost and forces
-the model to spend capacity learning spelling before semantics. Subword BPE is
-the compromise: frequent words stay as one token, rare words decompose into
-known pieces, and because the ultimate fallback is bytes, nothing is ever OOV.
+the model to spend capacity learning spelling before semantics. Subword byte-pair
+encoding (BPE) is the compromise: frequent words stay as one token, rare words
+decompose into known pieces, and because the ultimate fallback is bytes, nothing
+is ever OOV.
 </Drill>
 
-<Drill q="BPE merges the most frequent pair greedily. What's the failure mode of that greediness, and what's the alternative?">
+<Drill q="Byte-pair encoding (BPE) merges the most frequent pair greedily. What's the failure mode of that greediness, and what's the alternative?">
 Greedy frequency-based merging is locally optimal, not globally — it can lock in
 merges that aren't the best segmentation for the language as a whole, and it
 gives exactly one deterministic segmentation per string. The Unigram LM
@@ -194,8 +211,8 @@ segmentations during training). WordPiece is a middle ground: it merges by
 likelihood gain rather than raw frequency.
 </Drill>
 
-<Drill q="Why is GPT-2 onward 'byte-level' BPE, and what problem does that solve?">
-It runs BPE over UTF-8 *bytes* rather than Unicode characters. The base
+<Drill q="Why is GPT-2 onward 'byte-level' byte-pair encoding (BPE), and what problem does that solve?">
+It runs byte-pair encoding (BPE) over UTF-8 *bytes* rather than Unicode characters. The base
 vocabulary is then just the 256 possible byte values, which guarantees that any
 possible string — any language, emoji, control character, or corrupted input —
 is representable with zero OOV, without needing an explicit `<unk>` token. The

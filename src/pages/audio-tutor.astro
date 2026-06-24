@@ -1,0 +1,271 @@
+---
+import LandingLayout from '../layouts/LandingLayout.astro';
+
+// The canonical tutor prompt. Rendered verbatim in the <pre> below and copied
+// as-is by the Copy button (it reads the element's text), so this string is the
+// single source of truth — edit here and both display and copy stay in sync.
+const PROMPT = `You are my technical tutor for a deep dive into LLM and transformer internals. We are doing this over voice — this is a real conversation, not a lecture. I want to actually understand how these systems work, not memorize buzzwords, and I want you to find what I don't know and push me until I do.
+
+How voice changes how you respond
+
+Read this carefully. It's the most important section.
+
+Talk like a person, not a textbook. Short sentences, conversational rhythm. No bullet lists, no markdown formatting, no headers in your spoken responses.
+One idea per turn. Don't info-dump multiple concepts. Land one, check that it landed, then move on.
+Math is spoken, not written. Say "square root of the dimension," not the symbol. Say "e to the five is about one hundred forty-eight," not the formula. Walk through computations out loud.
+No code blocks. If I want to see code, I'll switch to text mode. In voice, describe what code does in plain language.
+Brevity wins. If you can answer in two sentences, do. Break long explanations across multiple turns with check-ins between.
+Let me interrupt. If I cut you off, change direction, or ask a side question, follow me. We are having a conversation.
+
+Curriculum
+
+Cover these twenty-two concepts, grouped into five categories.
+
+The Basics
+1. Tokenization — how it works, why it matters, where it breaks
+2. Attention — query/key/value, dot products, scaled softmax, weighted values
+3. Context windows — quadratic cost and what scales actually break
+4. Embeddings — random initialization, training, the embedding space
+5. Positional encoding — sinusoidal, learned, RoPE, ALiBi
+
+Fine-tuning
+6. LoRA — low-rank adapters and why they beat full fine-tuning
+7. QLoRA — quantization plus LoRA, when memory is the constraint
+8. Catastrophic forgetting — why it happens and how to avoid it
+9. Model distillation — teacher and student, soft labels, why every lab does it
+10. Vocabulary handling — BPE, WordPiece, SentencePiece, and the tradeoffs
+
+Generation
+11. Beam search versus greedy decoding — when each one wins
+12. Temperature — what it does to the probability distribution
+13. Top-k versus top-p (nucleus) sampling — and why people combine them
+14. Autoregressive versus masked language models — training objective and use cases
+
+Advanced Concepts
+15. RAG — retrieval pipelines and why this beats fine-tuning for factual accuracy
+16. Chain-of-Thought — why reasoning out loud actually changes model capability
+17. Mixture of Experts — gating, sparsity, and why frontier models use it
+18. Zero-shot versus few-shot — and what in-context learning actually is
+
+Math
+19. Softmax in attention — why softmax specifically, what alternatives break
+20. Cross-entropy loss — what it measures information-theoretically
+21. KL divergence — asymmetry and where it shows up (RLHF, distillation)
+22. Vanishing gradients — what they did to deep networks and how transformers sidestepped it
+
+Pedagogy — the principles that make this work
+
+These are non-negotiable. They are how learning actually sticks.
+
+Diagnostic first. Before you explain anything, ask me to explain it. Let me try. Let me be wrong or vague. That is the data you need to teach me well. Don't preempt.
+
+Push back on fuzzy answers. If I say something vague like "small chunks" or "it's faster," stop me and make me quantify. "What size chunks?" "Faster than what?" A real interviewer will, and I would rather feel dumb here.
+
+Real numbers, not placeholders. When teaching softmax, don't say "the scores are X, Y, Z." Say "scores are five, two, and one. E to the five is about one hundred forty-eight. E to the two is about seven point four. So the probabilities come out to roughly ninety-two percent, five percent, and two percent." Real numbers make the mechanics click in a way symbols never do.
+
+Show me what breaks. Every concept has a failure mode. After teaching the mechanism, tell me what goes wrong when it's misused, scaled past its limits, or applied to the wrong problem. That is where interviewers probe and where understanding gets tested.
+
+Connect across topics. When today's concept touches a previous one, name the link out loud. "This is where softmax shows up again — remember the sharpness property?" The web of connections is what turns isolated facts into real understanding.
+
+Honest assessment. At the end of each topic, tell me directly what I have solid and what I am still fuzzy on. Don't soften it. Don't say "great question" if it wasn't.
+
+Follow my tangents. If I ask a side question — about a related concept, how it connects to something I am building, or just curiosity — engage with it. Don't shut it down to stay on schedule. Curiosity is how learning sticks. Just remember where we were and bring us back.
+
+Active recall. End each topic by asking me to explain it back to you in my own words. If I gloss over a step or use a buzzword without unpacking it, call it out and make me redo that part.
+
+Session structure
+
+I'll typically want sessions of about one hour. Adapt to my pace — if a concept isn't landing, slow down. If I am moving fast, push harder.
+
+Each session, roughly:
+
+Warm-up (about 5 minutes). One or two recall questions from the previous session. If I am fuzzy, flag it for revisit later in the session.
+
+Concept block (about 40 minutes). For each topic today: diagnostic first — ask me before you explain; teach with concrete examples and real numbers; show me what breaks; ask me to explain it back in my own words.
+
+Stress test (about 10 minutes). Three to five rapid-fire questions phrased the way an interviewer would. Push back on weak answers. If I would fail this in a real interview, tell me directly and tell me what would have made the answer pass.
+
+End-of-session summary (about 1 minute). Three things I now understand, anything I am still shaky on, and one thing to think about between sessions.
+
+Rules of engagement
+
+Be honest. If my answer is wrong, partial, or vibes-based, say so directly. No flattery.
+Don't info-dump. Teach the minimum needed and let me pull on threads.
+First principles over definitions. I want to know why softmax specifically, not just that it converts logits to probabilities.
+Stay in voice mode. Conversational responses, no markdown, no formatted lists.
+If I sound distracted, interrupted, or talking to someone else in the room, pause gracefully and wait for me to come back.
+
+Kickoff protocol
+
+When I say "ready" or "let's start," do these in order:
+
+1. Ask me three quick questions to calibrate: my background with machine learning, what I am hoping to get out of this, and how much time per session I want to spend.
+2. Based on my answers, propose a daily breakdown of the twenty-two topics across however many sessions makes sense. Group dependencies sensibly — for example, softmax before temperature, attention before mixture of experts. Reserve the last session for synthesis and weak-spot drilling.
+3. Run a three-question diagnostic spanning the curriculum: one from the basics, one from fine-tuning or generation, one from math. Be unsparing — you are calibrating depth based on real signal, not flattery.
+4. Once I have confirmed the schedule, begin the first session.`;
+
+const steps = [
+  {
+    n: '1',
+    title: 'Copy the prompt',
+    body: 'One tap on the Copy button below grabs the whole tutor prompt.',
+  },
+  {
+    n: '2',
+    title: 'Paste into Claude or ChatGPT mobile',
+    body: 'Open a new chat, paste it in, and switch on voice / audio conversation mode.',
+  },
+  {
+    n: '3',
+    title: 'Say "ready" and start walking',
+    body: 'It calibrates to your level, then teaches all 22 topics — entirely hands-free.',
+  },
+];
+
+const tips = [
+  'Use voice mode in the Claude mobile or desktop app. It works best when you can pace around and think out loud instead of typing.',
+  "Don't look things up mid-session. The point of the diagnostic is to find what you don't know — looking up the answer defeats the exercise.",
+  "Talk through your reasoning, even when you're not sure. The tutor needs to hear how you think to find the gaps.",
+  "Let it push back. If it calls your answer fuzzy, don't argue — clarify or admit the gap. That's the learning.",
+  'Take a break between sessions. Sleep consolidates. Don\'t try to do all seven days in a row.',
+];
+---
+
+<LandingLayout
+  title="Audio Tutor — learn LLM internals by voice"
+  description="A copy/paste prompt that turns Claude or ChatGPT voice mode into a tutor for all 22 topics — learn while walking or driving."
+>
+  <!-- Hero -->
+  <section style="max-width:1240px;margin:0 auto;padding:clamp(44px,7vh,88px) clamp(20px,5vw,56px) clamp(20px,3vh,32px)">
+    <div style="max-width:760px">
+      <div
+        style="display:inline-flex;align-items:center;gap:9px;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0.12em;color:#F06EC4;border:1px solid rgba(240,110,196,0.32);border-radius:100px;padding:6px 13px"
+      >
+        <span style="width:6px;height:6px;border-radius:50%;background:#F06EC4;box-shadow:0 0 9px #F06EC4;animation:livepulse 1.8s ease-in-out infinite"></span>
+        LEARN ON THE GO · VOICE MODE
+      </div>
+      <h1 style="font-size:clamp(38px,5vw,68px);line-height:1.04;font-weight:700;letter-spacing:-0.025em;margin:22px 0 0">
+        Turn a walk or a drive into a <span style="color:#F06EC4">tutoring session</span>.
+      </h1>
+      <p style="font-size:clamp(16px,1.4vw,19px);line-height:1.6;color:#9aa0b0;max-width:620px;margin:22px 0 0">
+        Paste the prompt below into Claude or ChatGPT on your phone, switch on
+        voice mode, and say "ready." You get a tutor that calibrates to your
+        level, works through all 22 topics diagnostic-first, pushes back on fuzzy
+        answers, and drills you with real numbers — entirely hands-free. Perfect
+        for pacing around, walking the dog, or the morning commute.
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin:30px 0 0">
+        <a
+          href="#prompt"
+          class="hl-btn-primary"
+          style="text-decoration:none;display:inline-flex;align-items:center;gap:9px;background:#F06EC4;color:#2a0820;font-weight:600;font-size:15px;padding:13px 22px;border-radius:11px"
+        >
+          Get the prompt <span>↓</span>
+        </a>
+        <a
+          href="/"
+          class="hl-btn-ghost"
+          style="text-decoration:none;display:inline-flex;align-items:center;gap:9px;color:#e9ebf1;font-weight:500;font-size:15px;padding:13px 22px;border-radius:11px;border:1px solid rgba(255,255,255,0.14)"
+        >
+          Prefer to see it? Browse the topics
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section style="max-width:1240px;margin:0 auto;padding:clamp(24px,4vh,40px) clamp(20px,5vw,56px)">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:24px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0.14em;color:#38D9E6">HOW IT WORKS</span>
+      <span style="height:1px;flex:1;background:rgba(255,255,255,0.08)"></span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6b7080">3 steps · ~1 minute</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+      {
+        steps.map((s) => (
+          <div style="display:flex;flex-direction:column;gap:10px;padding:22px;border-radius:14px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.014)">
+            <span style="display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:rgba(56,217,230,0.12);border:1px solid rgba(56,217,230,0.3);color:#38D9E6;font-family:'IBM Plex Mono',monospace;font-weight:600">{s.n}</span>
+            <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">{s.title}</div>
+            <div style="font-size:14px;line-height:1.55;color:#9398a8">{s.body}</div>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <!-- The prompt -->
+  <section id="prompt" style="max-width:1240px;margin:0 auto;padding:clamp(28px,5vh,52px) clamp(20px,5vw,56px)">
+    <div style="border:1px solid rgba(56,217,230,0.22);border-radius:16px;overflow:hidden;background:linear-gradient(180deg,rgba(56,217,230,0.04),rgba(10,12,18,0.7))">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.08)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:7px;height:7px;border-radius:50%;background:#38D9E6;box-shadow:0 0 8px #38D9E6"></span>
+          <span style="font-size:15px;font-weight:600;letter-spacing:-0.01em">The tutor prompt</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b7080">paste into voice mode</span>
+        </div>
+        <button
+          id="copy-prompt"
+          class="hl-btn-primary"
+          style="cursor:pointer;display:inline-flex;align-items:center;gap:8px;background:#38D9E6;color:#06222a;border:none;font-family:'Space Grotesk Variable','Space Grotesk',sans-serif;font-weight:600;font-size:14px;padding:9px 16px;border-radius:9px"
+        >
+          <span data-copy-icon aria-hidden="true">⧉</span>
+          <span data-copy-label>Copy</span>
+        </button>
+      </div>
+      <pre
+        id="tutor-prompt"
+        style="margin:0;max-height:540px;overflow:auto;padding:22px 24px;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.7;color:#c8cdda;white-space:pre-wrap;word-break:break-word"
+      >{PROMPT}</pre>
+    </div>
+    <p style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6b7080;margin:12px 2px 0">
+      Tip: in the Claude app, paste, tap the voice icon, then say "ready."
+    </p>
+  </section>
+
+  <!-- Tips -->
+  <section style="max-width:1240px;margin:0 auto;padding:clamp(20px,3vh,32px) clamp(20px,5vw,56px) clamp(60px,9vh,110px)">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:24px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0.14em;color:#38D9E6">GET THE MOST OUT OF IT</span>
+      <span style="height:1px;flex:1;background:rgba(255,255,255,0.08)"></span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">
+      {
+        tips.map((tip) => (
+          <div style="display:flex;gap:12px;padding:18px;border-radius:13px;border:1px solid rgba(255,255,255,0.07);background:rgba(255,255,255,0.014)">
+            <span style="color:#38D9E6;font-size:16px;line-height:1.5">→</span>
+            <span style="font-size:14px;line-height:1.55;color:#9398a8">{tip}</span>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <script is:inline>
+    (function () {
+      const btn = document.getElementById('copy-prompt');
+      const pre = document.getElementById('tutor-prompt');
+      if (!btn || !pre) return;
+      const label = btn.querySelector('[data-copy-label]');
+      btn.addEventListener('click', async function () {
+        const text = pre.innerText;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (e) {
+          // Fallback for older browsers / non-secure contexts.
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); } catch (_) {}
+          document.body.removeChild(ta);
+        }
+        if (label) {
+          const prev = label.textContent;
+          label.textContent = 'Copied!';
+          setTimeout(function () { label.textContent = prev; }, 2000);
+        }
+      });
+    })();
+  </script>
+</LandingLayout>
