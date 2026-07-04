@@ -223,7 +223,7 @@ export const TOPICS: Topic[] = [
     title: 'Cross-entropy Loss',
     hook: 'The loss is just the negative log of the probability you put on the right answer — and the log is why being confidently wrong is catastrophic.',
     category: 'math',
-    status: 'planned',
+    status: 'ready',
     viz: 'Drag p(correct), watch −log p',
   },
   {

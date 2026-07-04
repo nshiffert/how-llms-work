@@ -1,0 +1,292 @@
+---
+title: Cross-entropy Loss
+category: math
+hook: The loss is just the negative log of the probability you put on the right answer — and the log is why being confidently wrong is catastrophic.
+crossLinks:
+  - softmax
+  - kl-divergence
+  - distillation
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import CrossEntropyExplorer from '../../components/islands/CrossEntropyExplorer.tsx';
+
+<Section n={1} title="What cross-entropy is" tag="One number for how wrong a prediction was">
+
+Training is a loop: the model predicts, something measures how wrong the
+prediction was, and backpropagation nudges every weight downhill on that
+measurement. The measurement has to be a **single differentiable number** —
+that is the entire job description of a loss function. For a language model,
+the prediction is a probability distribution over the whole vocabulary (the
+output of the final softmax), and the "right answer" is simply whichever token
+actually came next in the training text.
+
+Cross-entropy is the standard loss for this, and the formula is shorter than
+its name:
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> For a true class $c$
+  and a predicted distribution $p$, the cross-entropy loss is
+  $\;-\log(p_c)$ — the negative log of the probability the model put on the
+  <em>correct</em> answer. In practice the log is the natural log, so the loss
+  is measured in <strong>nats</strong>. Predict $p_c = 1$ and the loss is 0;
+  let $p_c \to 0$ and the loss grows without bound.
+</div>
+
+Read that again, because it is stranger than it looks: the loss reads **one
+entry** of the prediction vector. GPT-2's output distribution has 50,257
+entries, and cross-entropy looks at exactly one of them — the probability on
+the token that actually occurred. The other 50,256 numbers never appear in the
+formula. (They still matter, through the gradient — section 2.)
+
+And what supervises this? The training text itself. The "label" at every
+position is just the next token of the document, so raw text is its own
+labeled dataset — this is what **self-supervised** means, and it is why LLMs
+can train on trillions of tokens without a single human annotation. A
+1,000-token document is 1,000 classification problems, each one "predict entry
+number $t{+}1$," and the reported training loss is the average $-\log(p_c)$
+over every position.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Only the truth's probability is read — and −log punishes low values brutally">
+
+Two facts carry this whole topic.
+
+**Fact 1: only $p_c$ enters the formula.** Shuffle probability mass among the
+wrong answers however you like — the loss does not move. A prediction of
+[cat 0.7, dog 0.29, bird 0.01] and [cat 0.7, dog 0.15, bird 0.15] cost exactly
+the same when the truth is "cat."
+
+**Fact 2: the −log curve is savagely asymmetric.** Here is the ladder, worth
+memorizing:
+
+| $p_c$ | $-\ln(p_c)$ | verdict |
+| --- | --- | --- |
+| 0.99 | 0.010 | confident and right — almost free |
+| 0.9 | 0.105 | still cheap |
+| 0.7 | 0.357 | decent |
+| 0.5 | 0.693 | coin flip |
+| 0.1 | 2.303 | wrong-ish — it hurts now |
+| 0.01 | 4.605 | confidently wrong — 460× the loss of 0.99 |
+| 0.001 | 6.908 | catastrophic |
+
+The pattern in the ladder: **equal ratios in probability become equal steps in
+loss**. Every halving of $p_c$ adds the same 0.69; every ÷10 adds the same
+2.3. That means the curve is nearly flat at the top and a cliff at the bottom —
+losing 0.09 of probability mass from 0.99 → 0.9 costs +0.095 of loss, while
+losing the *same* 0.09 of mass from 0.1 → 0.01 costs +2.303. Same mass,
+**24× the price**, purely because of where on the curve it happens. High
+confidence on the right answer is rewarded cheaply; high confidence on a wrong
+answer is punished without limit.
+
+Feel both facts directly:
+
+<VizFrame
+  label="Cross-entropy: predicted distribution vs one-hot truth"
+  caption="The bars are the model's prediction; the ✓ marks the true next token (y = 1 — click another token name to move it). Drag the true token's bar from 0.99 down to 0.01 and watch the marker climb the −log cliff on the right. Then drag dog or bird: mass moves between the wrong answers and the loss does not budge — cross-entropy never reads where the wrong mass sits."
+>
+  <CrossEntropyExplorer client:visible />
+</VizFrame>
+
+So the loss *value* ignores the wrong answers — but the *gradient* does not.
+In every real model, cross-entropy sits directly on top of softmax, and that
+pairing produces one of the cleanest results in deep learning: the gradient of
+the loss with respect to logit $i$ is
+
+$$\frac{\partial L}{\partial z_i} = p_i - y_i$$
+
+— predicted probability minus one-hot target. The true token's logit gets
+pushed up with force $1 - p_c$; every wrong token's logit gets pushed down
+with force equal to its own current probability. The log exactly cancels the
+softmax's exp, which is why the two are always implemented as a single fused
+operation and why this pairing, rather than some other loss on top of softmax,
+became the default.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Where the name comes from.</span>
+  Cross-entropy $H(P, Q)$ is the expected number of bits (use $\log_2$; nats
+  for $\ln$) needed to encode samples drawn from the true distribution $P$
+  using a code optimized for your predicted distribution $Q$. If your
+  prediction matches reality, that cost is just the entropy of $P$ — the
+  irreducible minimum. Every bit above it is the penalty for predicting wrong:
+  $H(P, Q) = H(P) + \mathrm{KL}(P \,\|\, Q)$, where the KL divergence term is
+  exactly the waste. With a one-hot $P$, $H(P) = 0$, so the training loss IS
+  the KL divergence to the truth. That identity is the bridge to the KL
+  Divergence topic, and it is why distillation can swap cross-entropy for KL
+  when the target distribution is a teacher model instead of a one-hot label.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="True token 'cat' — three predictions, every number shown">
+
+The true next token is **"cat"**. Three models make three predictions over the
+tiny vocabulary \{cat, dog, bird\}:
+
+| prediction | $p_\text{cat}$ | loss $= -\ln(p_\text{cat})$ |
+| --- | --- | --- |
+| cat **0.99**, dog 0.005, bird 0.005 | 0.99 | **0.010** |
+| cat **0.70**, dog 0.20, bird 0.10 | 0.70 | **0.357** |
+| cat **0.01**, dog 0.50, bird 0.49 | 0.01 | **4.605** |
+
+Notice what the third row does *not* say: it doesn't matter that dog got 0.50
+— [cat 0.01, dog 0.98, bird 0.01] would cost exactly the same 4.605. The loss
+only asks one question: *how much probability did you put on what actually
+happened?*
+
+The core computation is one line, and the ladder from section 2 is three more:
+
+```python
+import numpy as np
+
+p = np.array([0.70, 0.20, 0.10])       # cat, dog, bird
+-np.log(p[0])                           # 0.357 — the loss, truth = index 0
+
+-np.log(0.99)                           # 0.010
+-np.log(0.01)                           # 4.605 — 460× the loss of 0.99
+-np.log(0.001)                          # 6.908
+```
+
+What actually runs in training never materializes probabilities at all — it
+goes straight from logits to loss with the fused log-softmax (section 4 is
+about why):
+
+```python
+import torch.nn.functional as F
+
+# logits: (seq_len, vocab_size) — raw scores, pre-softmax
+# targets: (seq_len,)           — the actual next-token ids
+loss = F.cross_entropy(logits, targets)   # mean of -log p_correct over positions
+```
+
+Two numbers worth carrying into any interview:
+
+- **The step-0 sanity check.** A freshly initialized model knows nothing, so
+  its softmax is roughly uniform: $p_c \approx 1/50{,}257$ for GPT-2's
+  vocabulary, giving loss $\approx \ln(50{,}257) = 10.82$ (about 12.2 for a
+  ~200k vocabulary). If your loss at step 0 isn't close to $\ln(V)$, your
+  wiring is broken before training even starts.
+- **Perplexity is just $e^{\text{loss}}$.** A mean loss of 2.303 nats is
+  perplexity 10: on average the model is as uncertain as a uniform choice
+  among 10 tokens. Papers report perplexity; the optimizer minimizes
+  cross-entropy; they are the same measurement on different scales.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Infinities, underflow, and the floor you can never reach">
+
+- **One confidently-wrong token dominates the batch.** A token predicted at
+  0.001 contributes 6.9 to the sum — as much as ~690 tokens predicted at 0.99.
+  And its gradient is the strongest the loss can emit: $p_i - y_i \approx -1$
+  on the true token's logit. This asymmetric pressure is the point — it is
+  what forces models to hedge realistically instead of gambling on favorites —
+  but it also means loss spikes during training often trace back to a handful
+  of rare tokens the model was sure couldn't come next.
+- **A hard zero is an infinite loss.** If anything in the pipeline puts an
+  exact 0 on a token that then actually occurs, the loss is $-\log(0) =
+  \infty$ and the gradients are NaN — one poisoned position kills the whole
+  batch, and a NaN loss step can corrupt the weights for good. Softmax with
+  finite logits can never emit an exact 0 (the Softmax topic covers why),
+  which is one more reason the pairing is safe — but code that post-processes
+  probabilities (banning tokens by zeroing them, aggressive rounding,
+  hand-rolled masking applied in the wrong place) rediscovers this failure the
+  hard way. This is also why you never hard-zero a vocabulary entry you might
+  still need to score.
+- **`log(softmax(x))` as two separate ops underflows.** A logit 104 nats below
+  the max has a true log-probability of about −104 — perfectly representable.
+  But computed naively, softmax first produces $e^{-104} \approx 7 \times
+  10^{-46}$, which rounds to exactly 0 in float32 (the smallest positive value is about
+  $1.4 \times 10^{-45}$), and then the log returns −inf. The fix is algebra,
+  not clamping: $\log(\mathrm{softmax}(z)_c) = z_c - \mathrm{logsumexp}(z)$,
+  computed with the same subtract-the-max trick softmax itself uses. This is
+  exactly what `F.cross_entropy` fuses — which is why it takes logits, and why
+  feeding it probabilities is a silent correctness bug.
+- **The loss can never reach zero — and shouldn't.** Zero loss requires
+  $p_c = 1$ at every position, which softmax cannot produce with finite
+  logits — and which language itself forbids: after "My favorite color is"
+  there is genuine uncertainty about the next token, and the best possible
+  model matches that uncertainty rather than eliminating it. Formally,
+  $H(P,Q) = H(P) + \mathrm{KL}(P\|Q)$: training can only drive the KL term
+  toward zero, and the entropy of real text remains as an irreducible floor.
+  A flattening loss curve near that floor is not a model that stopped
+  learning — chasing it to zero anyway is called overfitting.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why −log(p) and not something linear like 1 − p?">
+Three attacks. First, bounded penalties fail: 1 − p caps the cost of total
+confidence in the wrong answer at 1, so 0.01 and 0.000001 on the truth cost
+nearly the same — the model can write off hard tokens. −log is unbounded:
+every ÷10 costs another 2.3, forever, so no token is ever safe to abandon.
+Second, maximum likelihood: the probability of the whole dataset is the
+product of per-token probabilities, log turns that product into a sum, so
+minimizing mean cross-entropy IS maximizing the likelihood of the data — it's
+the statistically principled estimator, not a hand-picked heuristic. Third,
+the gradient: through softmax, −log gives ∂L/∂z = p − y, clean and
+well-scaled; a linear loss through softmax produces gradients that vanish
+exactly where the model is most wrong.
+</Drill>
+
+<Drill q="Why are cross-entropy and softmax always fused into one operation?">
+Because the log undoes the exp, and separating them breaks numerically. Fused:
+loss = logsumexp(z) − z_c, computed with the subtract-the-max trick — stable
+for any logits. Separated: softmax first produces actual probabilities, and a
+token 104 nats below the max becomes e⁻¹⁰⁴ ≈ 7×10⁻⁴⁶, which underflows to
+exact 0 in float32; the subsequent log returns −inf and the batch dies — even
+though the mathematically correct answer, about −104, is perfectly
+representable. Bonus:
+the fused gradient is p − y, one subtraction. This is why F.cross_entropy
+takes logits, not probabilities.
+</Drill>
+
+<Drill q="The loss formula only reads the true token's probability. Do the wrong tokens' logits receive any gradient?">
+Yes — all of them, through the softmax denominator. ∂L/∂z_i = p_i − y_i: the
+true token's logit is pushed up with force 1 − p_c, and every wrong token's
+logit is pushed down with force equal to its own current probability. So for
+[cat 0.7, dog 0.2, bird 0.1] with truth cat, the logit gradients are −0.3,
++0.2, +0.1. The loss *value* doesn't care where the wrong mass sits, but the
+gradient targets exactly the wrong tokens that hold the most mass — the
+distinction between the loss reading one entry and the gradient touching all
+of them is the point of the question.
+</Drill>
+
+<Drill q="What's the 'label' in language-model training? Is this supervised learning?">
+The label at position t is simply the token at position t+1 of the training
+text — the data labels itself, which is what "self-supervised" means. It's
+mechanically identical to supervised classification (a V-way softmax and
+cross-entropy against a hard label), but no human ever annotated anything,
+which is why pretraining scales to trillions of tokens. Every position is one
+classification problem, so a 1,000-token document yields 1,000 training
+examples in a single forward pass — with causal masking (see the Attention
+topic) ensuring position t can't peek at its own label.
+</Drill>
+
+<Drill q="Relate cross-entropy, entropy, and KL divergence — and say why distillation papers use CE and KL interchangeably.">
+The identity: H(P, Q) = H(P) + KL(P ∥ Q) — cross-entropy is the irreducible
+entropy of the target plus the extra cost of predicting Q instead of P. In
+pretraining, P is one-hot, so H(P) = 0 and cross-entropy literally equals the
+KL divergence to the truth. In distillation, P is the teacher's full soft
+distribution, so H(P) > 0 — but it's a constant with respect to the student's
+weights, so minimizing CE and minimizing KL give identical gradients; the two
+losses differ by a number the optimizer can't touch. That constant-offset
+argument is the whole answer.
+</Drill>
+
+<Drill q="You start pretraining a model with a 50,257-token vocabulary and the step-0 loss is 3.2. React.">
+Alarm, not celebration. A randomly initialized model should be near-uniform
+over the vocabulary, so the expected step-0 loss is ln(50,257) ≈ 10.8 (and
+e^10.8 ≈ 50k perplexity — maximally confused). A loss of 3.2 (perplexity ~25)
+before any training means information is leaking: most commonly the targets
+are visible in the inputs — an off-by-one error in the shift between input and
+target sequences, or a broken causal mask letting position t attend to t+1.
+The check cuts both ways: a loss stuck at 10.8 after thousands of steps means
+gradients aren't flowing. ln(V) at step 0, dropping steadily after — anything
+else is a bug.
+</Drill>
+
+</Section>
