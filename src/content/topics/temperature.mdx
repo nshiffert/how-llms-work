@@ -1,0 +1,235 @@
+---
+title: Temperature
+category: generation
+hook: One scalar divides the logits before softmax — and reshapes the entire next-token distribution from spiky to flat.
+crossLinks:
+  - softmax
+  - top-k-top-p
+  - beam-vs-greedy
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import TemperatureExplorer from '../../components/islands/TemperatureExplorer.tsx';
+
+<Section n={1} title="What temperature is" tag="One dial between predictable and diverse — applied after training, before sampling">
+
+The same model, the same weights, the same prompt can produce a terse,
+repeatable answer or a rambling, surprising one — and the difference is a
+single scalar applied at the very last step of generation. Every forward pass
+ends with a vector of **logits**, one raw score per vocabulary token, which
+softmax turns into the next-token probability distribution that sampling draws
+from. Temperature is a knob inserted between those two steps: it rescales the
+logits *before* the softmax, which reshapes the distribution the sampler sees.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Temperature divides
+  every logit by a constant $T$ before the softmax:
+  $p_i = \mathrm{softmax}(s_i / T)$. $T = 1$ is the identity — the raw trained
+  distribution. $T < 1$ magnifies the gaps between logits, so the distribution
+  sharpens toward the favorite; $T > 1$ shrinks the gaps, so it flattens toward
+  uniform. The outputs sum to exactly 1 at every $T$, because softmax
+  normalizes <em>after</em> the division — temperature changes the
+  <em>shape</em> of the distribution, never its validity.
+</div>
+
+Two boundaries worth fixing immediately. First, temperature is an
+**inference-time** knob: the model is trained at $T = 1$ (cross-entropy is
+computed on the plain softmax), and nothing in the weights knows the dial
+exists. Second, temperature is a knob on **sampling**. Greedy decoding is
+immune to it — dividing by a positive scalar never changes which logit is
+largest, so the argmax is the same at every $T$ — and beam search (the other
+deterministic strategy from the Beam Search vs Greedy lesson) is conventionally
+run on the untempered distribution. Temperature earns its keep only when you
+draw from the distribution instead of taking its peak.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Divide the logits — the exponential turns gaps into ratios">
+
+Why does one scalar reshape an entire distribution? Because softmax
+exponentiates. A logit gap of $\Delta$ between two tokens becomes a
+probability **ratio** of $e^{\Delta}$ — that is the amplification mechanic
+from the Softmax lesson. Divide all logits by $T$ and the gap becomes
+$\Delta / T$, so the ratio becomes $e^{\Delta/T}$. At $T = 0.5$ a gap of 3
+turns into $e^6 \approx 403$ instead of $e^3 \approx 20$; at $T = 2$ it
+collapses to $e^{1.5} \approx 4.5$. Temperature is a volume control on every
+pairwise ratio at once.
+
+There is an equivalent form that makes the reshaping even more concrete. If
+$p_i$ are the probabilities at $T = 1$, then the probabilities at temperature
+$T$ are proportional to $p_i^{1/T}$, renormalized. $T = 0.5$ **squares** every
+probability and renormalizes — big shares grow, small shares get crushed.
+$T = 2$ takes **square roots** — everything drifts toward everything else. As
+$T \to \infty$ every token approaches $1/V$: uniform noise. As $T \to 0^+$ the
+favorite takes everything: argmax.
+
+Feel it below. The prompt prefix is the same toy model as the Beam Search vs
+Greedy lesson — but this time nothing is deterministic.
+
+<VizFrame
+  label="Next-token distribution vs temperature · live sampling"
+  caption="Drag the slider and watch softmax(logits/T) sharpen toward one bar (low T) or flatten toward uniform (high T) — the ranking of the bars never changes, only their shares. Below, five completions are sampled at the current T: at 0.1 the five draws are usually the same sentence; at 1.5+ the keyboard and the moon start winning draws. The T = 0 preset shows what implementations actually do at the singularity: greedy argmax."
+>
+  <TemperatureExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">You have seen this move before.</span>
+  Attention divides its query–key scores by $\sqrt{d_k}$ before <em>its</em>
+  softmax — for $d_k = 64$, that is a fixed division by 8. Mathematically it is
+  the same operation as temperature: a scalar division on the scores, in the
+  same pre-softmax slot. The difference is intent. $\sqrt{d_k}$ is baked in at
+  training time to stop the softmax from saturating and killing gradients;
+  temperature is a user-facing dial at generation time to control sampling
+  diversity. Same math, different job.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Logits 5, 2, 1 at T = 0.5, 1, 2 — every number shown">
+
+Take the exact logits from the Softmax lesson's worked example — 5, 2, 1 — and
+run them through $\mathrm{softmax}(s/T)$ at three temperatures. At $T = 0.5$
+the scaled logits are 10, 4, 2; at $T = 2$ they are 2.5, 1, 0.5. Exponentiate,
+normalize:
+
+| step | A | B | C |
+| --- | --- | --- | --- |
+| logit $s$ | 5.0 | 2.0 | 1.0 |
+| $T = 0.5$ → softmax of 10, 4, 2 | **0.9972** | 0.0025 | 0.0003 |
+| $T = 1$ → softmax of 5, 2, 1 | **0.936** | 0.047 | 0.017 |
+| $T = 2$ → softmax of 2.5, 1, 0.5 | **0.736** | 0.164 | 0.100 |
+| $T = 4$ → softmax of 1.25, 0.5, 0.25 | **0.543** | 0.257 | 0.200 |
+
+Read down a column and the mechanic is unmistakable. A's lead over B is a
+fixed logit gap of 3, but its probability ratio moves from
+$e^{3/0.5} = e^6 \approx 403×$ at $T = 0.5$, to $e^3 \approx 20×$ at $T = 1$,
+to $e^{1.5} \approx 4.5×$ at $T = 2$. Every row still sums to exactly 1. And
+in every row A is still first, B second, C third — no temperature can make B
+overtake A; only sampling luck can.
+
+```python
+import numpy as np
+
+def softmax(s):
+    z = s - s.max()          # the standard overflow guard — see Softmax
+    e = np.exp(z)
+    return e / e.sum()
+
+s = np.array([5.0, 2.0, 1.0])
+
+softmax(s / 0.5)   # [0.9972, 0.0025, 0.0003]  T=0.5 — sharpened
+softmax(s / 1.0)   # [0.936,  0.047,  0.017 ]  T=1   — the raw distribution
+softmax(s / 2.0)   # [0.736,  0.164,  0.100 ]  T=2   — flattened
+softmax(s / 4.0)   # [0.543,  0.257,  0.200 ]  T=4   — drifting toward 1/3 each
+
+np.random.choice(3, p=softmax(s / 2.0))   # sampling happens AFTER the reshape
+```
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">The ranges that matter in practice.</span>
+  <strong>T ≈ 0.1</strong>: near-deterministic — common patterns repeat, good
+  for extraction and structured output. <strong>T ≈ 0.7–1.0</strong>: the
+  typical conversational band — coherent with variety; most chat products
+  live here. <strong>T &gt; 1.5</strong>: noticeably wandering — occasionally
+  interesting, frequently nonsensical. The API surfaces match:
+  OpenAI exposes 0–2 with default 1; Anthropic exposes 0–1 with default 1.
+</div>
+
+</Section>
+
+<Section n={4} title="What breaks" tag="The zero singularity, the flat catastrophe, and what T can never do">
+
+- **T = 0 is a divide-by-zero.** $s/T$ is undefined at $T = 0$, so the math
+  has no answer there — but APIs accept it anyway. Implementations special-case
+  it as the limit $T \to 0^+$: greedy argmax decoding, no sampling at all.
+  That inherits greedy's failure modes from the Beam Search vs Greedy lesson —
+  including degenerate repetition loops. And even T = 0 is not a bit-exact
+  reproducibility guarantee in production: non-deterministic GPU kernels and
+  batch-dependent execution can still flip near-tied logits between runs.
+- **Very low T loops.** At $T = 0.1$ the model near-deterministically takes
+  the favorite at every step, and once a phrase becomes its own most likely
+  continuation, you get formulaic, repetitive text — the five identical
+  samples in the widget are the small version of "I'm sorry. I'm sorry. I'm
+  sorry."
+- **Very high T is uniform noise.** As $T$ grows, the distribution approaches
+  $1/V$ per token — for a ~200k vocabulary, effectively drawing tokens out of
+  a hat. Long before that limit the output degrades: softmax outputs are
+  strictly positive, so every garbage token in the tail keeps nonzero mass,
+  and flattening hands the tail real probability. Temperature reshapes the
+  distribution but **never truncates it** — cutting the tail off is a
+  different knob, and it is exactly what top-k and top-p do.
+- **Temperature cannot change the ranking.** Dividing by a positive scalar
+  preserves the order of the logits, so the model's first choice is the first
+  choice at every $T$. If the model's distribution is wrong — the right answer
+  isn't near the top — no temperature fixes that. Temperature redistributes
+  trust across the model's existing opinion; it cannot inject a better one.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Where exactly in the pipeline does temperature apply, and what other famous operation lives in the same slot?">
+Between the final logits and the softmax, at generation time only:
+softmax(logits / T), computed just before sampling. The same slot holds
+attention's √d_k scaling — both are scalar divisions on scores immediately
+before a softmax. The difference is purpose: √d_k is fixed at training time to
+prevent softmax saturation from killing gradients; temperature is a
+user-facing inference dial for sampling diversity. Training itself runs at
+T = 1 — cross-entropy is computed on the unscaled softmax, and the weights
+never see the knob.
+</Drill>
+
+<Drill q="Does dividing the logits by T break the sum-to-1 property of the output?">
+No, and it can't — normalization is the last step of softmax, so it
+renormalizes whatever the inputs are. Dividing by T changes the shape:
+below 1 sharpens toward one-hot, above 1 flattens toward uniform, and the
+outputs sum to exactly 1 at every temperature. This is the same
+shift-and-scale reasoning as in the Softmax lesson: input scaling reshapes
+the distribution but can never invalidate it.
+</Drill>
+
+<Drill q="Why does a single scalar reshape the entire distribution? Walk through the mechanism.">
+Because softmax exponentiates, differences become ratios: a logit gap Δ maps
+to a probability ratio e^Δ. Temperature rescales every gap to Δ/T, so every
+pairwise ratio becomes e^(Δ/T) — one scalar moves all of them at once. A gap
+of 3 is a 20× ratio at T = 1, a 403× ratio at T = 0.5, and a 4.5× ratio at
+T = 2. Equivalently: the distribution at temperature T is the T = 1
+distribution raised elementwise to the power 1/T and renormalized — T = 0.5
+squares the probabilities, T = 2 square-roots them.
+</Drill>
+
+<Drill q="What does T = 0 mean mathematically, and what do implementations actually do?">
+Mathematically nothing — dividing by zero is undefined, so T = 0 is a
+singularity, not a valid temperature. Implementations treat it as the limit
+T → 0⁺, where the distribution converges to all mass on the argmax, and just
+run greedy decoding with no sampling. That buys near-determinism but inherits
+greedy's pathologies (repetition loops, local traps — see Beam Search vs
+Greedy), and it still isn't a bit-exact guarantee in production, where
+non-deterministic GPU kernels can flip near-tied logits between runs.
+</Drill>
+
+<Drill q="Temperature and top-k/top-p all tune sampling. Same knob?">
+No — orthogonal knobs on the same distribution. Temperature reshapes: every
+token keeps nonzero probability, only the shares move. Top-k and top-p
+truncate: they delete the tail outright (fixed count vs fixed probability
+mass) and renormalize over the survivors. Neither substitutes for the other —
+high temperature without truncation hands real mass to garbage tokens, which
+is exactly the failure top-k/top-p exist to stop, and pipelines routinely
+apply truncation and then sample from the survivors at temperature T.
+</Drill>
+
+<Drill q="Why does knowledge distillation deliberately crank the temperature up during training?">
+A trained teacher's softmax is nearly one-hot — saturated — so at T = 1 it
+carries little more information than the hard label. Raising T (typically
+2–5) on both teacher and student softmaxes flattens the distributions and
+exposes the teacher's relative preferences among the wrong answers — the
+"dark knowledge" (that a truck is more like a car than like a carrot) that is
+the actual signal the student learns from. Same mechanic as generation-time
+temperature — divide logits by T to un-saturate a softmax — used for a
+training-time purpose.
+</Drill>
+
+</Section>

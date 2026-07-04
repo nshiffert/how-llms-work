@@ -155,7 +155,7 @@ export const TOPICS: Topic[] = [
     title: 'Temperature',
     hook: 'One scalar divides the logits before softmax — and reshapes the entire next-token distribution from spiky to flat.',
     category: 'generation',
-    status: 'planned',
+    status: 'ready',
     viz: 'Distribution reshape + live samples',
   },
   {
