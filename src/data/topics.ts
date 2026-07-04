@@ -239,7 +239,7 @@ export const TOPICS: Topic[] = [
     title: 'Vanishing Gradients',
     hook: 'Stack enough layers and the backward signal decays to nothing — residual connections are the highway that let it survive.',
     category: 'math',
-    status: 'planned',
+    status: 'ready',
     viz: '20-layer gradient flow, residual toggle',
   },
 ];

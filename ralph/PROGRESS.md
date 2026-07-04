@@ -22,7 +22,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 4  | softmax                  | math       | done   | [outline](outlines/softmax.md)            | 408cda6 |
 | 5  | cross-entropy            | math       | done   | [outline](outlines/cross-entropy.md)      | 643cb2f |
 | 6  | kl-divergence            | math       | done   | [outline](outlines/kl-divergence.md)      | 3b547f2 |
-| 7  | vanishing-gradients      | math       | todo   | [outline](outlines/vanishing-gradients.md)|        |
+| 7  | vanishing-gradients      | math       | done   | [outline](outlines/vanishing-gradients.md)|        |
 | 8  | beam-vs-greedy           | generation | todo   | [outline](outlines/beam-vs-greedy.md)     |        |
 | 9  | temperature              | generation | todo   | [outline](outlines/temperature.md)        |        |
 | 10 | top-k-top-p              | generation | todo   | [outline](outlines/top-k-top-p.md)        |        |

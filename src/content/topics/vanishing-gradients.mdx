@@ -1,0 +1,286 @@
+---
+title: Vanishing Gradients
+category: math
+hook: Stack enough layers and the backward signal decays to nothing — residual connections are the highway that let it survive.
+crossLinks:
+  - attention
+  - cross-entropy
+  - softmax
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import GradientFlowExplorer from '../../components/islands/GradientFlowExplorer.tsx';
+
+<Section n={1} title="What vanishing gradients are" tag="Why deep nets refused to train for decades">
+
+For decades, depth was the obvious way to make neural networks more powerful —
+and it didn't work. Nets deeper than a handful of layers trained *worse* than
+shallow ones, not because they lacked capacity, but because the training signal
+never reached the early layers. The forward pass was fine. The **backward pass**
+was broken.
+
+Here is the setup. Training has two halves: the forward pass runs the input
+through every layer and scores the output with a loss (for language models,
+cross-entropy on the next token). The backward pass then assigns blame — it
+computes, for every weight, how much the loss would drop if that weight moved.
+The blame is delivered by the chain rule, and the chain rule is a **product**:
+the gradient at layer 1 is the gradient at the loss multiplied by one local
+derivative per layer it passes through on the way back.
+
+That product is the problem. If the typical factor is less than 1 — and with
+the classic activations it always was — the product shrinks *exponentially*
+with depth. Twenty layers of 0.5 is not "half as much signal," it is
+0.5<sup>20</sup> ≈ **9.5 × 10⁻⁷**: about a millionth. Layer 20 gets a full-strength
+gradient; layer 1 gets noise. The early layers — the ones building the
+foundational features everything above depends on — effectively stop learning.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Vanishing gradients:
+  during backpropagation, the gradient reaching layer <em>k</em> is a
+  <strong>product of per-layer local derivatives</strong> from the loss down to
+  <em>k</em>. When those factors are typically below 1, the product decays
+  exponentially with depth, so early layers receive vanishingly small updates
+  and stop learning.
+</div>
+
+Get the direction right, because it kills a common misconception: this is not a
+forward-pass or capacity problem. The deep net can *represent* the function
+fine — it just can't be *trained* to, because the learning signal dies on the
+way back. And since every extra layer adds another sub-1 factor to the product,
+**more layers make it worse, not better**. That inversion — depth hurting — is
+exactly what stalled the field until the fixes below.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="A product of local derivatives — and the identity path that survives it">
+
+Write the chain rule out for a 20-layer stack, where $h_k$ is the output of
+layer $k$ and $L$ is the loss:
+
+$$
+\frac{\partial L}{\partial h_1}
+= \frac{\partial L}{\partial h_{20}}
+\cdot \frac{\partial h_{20}}{\partial h_{19}}
+\cdot \frac{\partial h_{19}}{\partial h_{18}}
+\cdots
+\frac{\partial h_{2}}{\partial h_{1}}
+$$
+
+Nineteen factors, multiplied. Each factor is the layer's weight matrix times the
+derivative of its activation function — and the classic activations rig that
+product against you. The sigmoid's derivative **peaks at 0.25** (at input 0) and
+collapses from there: at input ±2 it is 0.105, at ±4 it is 0.018. Tanh peaks at
+exactly 1, but only at the single point 0 — at input 1 its derivative is already
+down to 0.42. Every saturated unit contributes a near-zero factor, and one
+near-zero factor anywhere in the chain zeroes the whole product.
+
+Four things fixed this, and a transformer uses all of them:
+
+- **ReLU.** Its derivative is exactly 1 everywhere it's active — a factor that
+  doesn't shrink the product no matter how deep you stack. Modern LLMs use its
+  smooth relatives, GELU and SwiGLU, which keep the property that matters here:
+  a non-saturating slope near 1 for positive inputs. (ReLU's own failure mode:
+  a unit stuck in the negative region has derivative exactly 0 — "dead ReLU" —
+  which is vanishing at the single-unit scale.)
+- **Residual connections.** Reshape the layer from $y = f(x)$ to
+  $y = x + f(x)$. The derivative becomes $1 + f'(x)$. That leading 1 is the
+  whole trick: multiply the factors out across 20 layers and among the terms is
+  a **pure identity path** — a product of plain 1s that never touches a branch
+  derivative. Even if every branch saturates to $f' \approx 0$, the factor goes
+  to 1, not 0, and the gradient rides the highway to layer 1 intact.
+- **Layer norm.** Re-centers and re-scales each layer's pre-activations, which
+  keeps them in the activation's responsive zone — derivatives near their peak
+  instead of out in the saturated flats. It also keeps the residual stream's
+  scale from drifting upward layer after layer, which tames the exploding
+  direction.
+- **Attention.** RNNs had a second version of the same disease: to connect a
+  word to context 50 tokens back, the gradient had to survive 49 sequential
+  hops through the hidden state — the same shrinking product, through time
+  instead of depth. Attention scores every pair of positions directly, so the
+  path between any two tokens is **one hop, regardless of distance**.
+
+Watch the product do its work. Start with sigmoid and no fixes, then flip the
+toggles:
+
+<VizFrame
+  label="Gradient flow through a 20-layer stack"
+  caption="Each bar is the gradient magnitude reaching that layer, on a log scale, sweeping backward from the loss. With sigmoid and no fixes the bars are dead red by layer 10. Turn on residual connections — the identity path carries the signal to layer 1 nearly intact, even with sigmoid still saturating. Layer norm keeps the factors near their healthy peak. The second tab is the same product through time: drag the distance slider and watch the RNN chain die while the attention edge doesn't care."
+>
+  <GradientFlowExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Why "highway" is the right word.</span>
+  Expand the residual product ∏(1 + f′<sub>k</sub>) over 20 layers and you get
+  2<sup>20</sup> terms — one for every subset of branches the gradient could
+  route through. Exactly one of those terms is all identity: a bare 1. The
+  gradient doesn't have to survive every layer anymore; it only needs the one
+  toll-free lane that's guaranteed to exist. Everything the branches add is a
+  bonus on top.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="0.5 per layer, 20 layers — dead; add the identity path — alive">
+
+Take a 20-layer stack where each layer multiplies the gradient by 0.5 — a
+generous number, given sigmoid can't beat 0.25 even at its peak. Start the
+gradient at 1.0 at the loss and walk it backward:
+
+| gradient has passed… | plain stack, ×0.5 each | residual stack, ×(1 ± 0.05) |
+| --- | --- | --- |
+| 1 layer | 0.5 | 1.05 |
+| 5 layers | 0.031 | 1.045 |
+| 10 layers | 9.8 × 10⁻⁴ | 0.988 |
+| 15 layers | 3.1 × 10⁻⁵ | 1.032 |
+| 20 layers | **9.5 × 10⁻⁷** | **0.975** |
+
+The plain column loses roughly an order of magnitude every three layers and
+arrives at layer 1 a millionth of its starting size. With a typical learning
+rate of 3 × 10⁻⁴, layer 1's weights move about 3 × 10⁻¹⁰ per step — for
+practical purposes, frozen. And 0.5 was charitable: at sigmoid's absolute best
+case of 0.25 per layer, the product is 0.25<sup>20</sup> ≈ **9.1 × 10⁻¹³**.
+
+The residual column uses the same 20 layers, but each factor is $1 + f'$ with a
+small branch derivative alternating ±0.05 — the regime layer norm keeps you in.
+The factors hover around 1, so the product does too: the gradient reaches layer
+1 at **0.975**, essentially full strength. Nothing clever happened — the
+identity path simply never got multiplied by anything small.
+
+And no, the win doesn't come from quietly shrinking the branch to ±0.05. Run
+the stress case with the *same* magnitude as the plain column: branch
+derivatives of ±0.5 give residual factors of 1.5 and 0.5 alternating, and
+(1.5 × 0.5)¹⁰ = 0.75¹⁰ ≈ **0.056**. Still five orders of magnitude better than
+9.5 × 10⁻⁷ — because the factors are now centered on 1 instead of 0. The
+identity path does the rescuing; layer norm's small-branch regime just turns
+"rescued" into "essentially untouched."
+
+The whole computation is a cumulative product:
+
+```python
+import numpy as np
+
+factors_plain    = np.full(20, 0.5)                # each layer: × 0.5
+factors_residual = 1 + np.tile([0.05, -0.05], 10)  # each layer: × (1 + f')
+
+# walk backward from the loss: cumulative product of the factors
+g_plain    = np.cumprod(factors_plain)
+g_residual = np.cumprod(factors_residual)
+
+g_plain[[0, 4, 9, 14, 19]]
+# array([5.0e-01, 3.1e-02, 9.8e-04, 3.1e-05, 9.5e-07])   <- dead by the end
+
+g_residual[19]
+# 0.9753...                                              <- the highway held
+
+0.25 ** 20
+# 9.09e-13    sigmoid's best case: deader
+```
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Depth ceilings, forgotten context, and the exploding twin">
+
+- **The pre-residual depth ceiling.** Before 2015, deep feedforward and conv
+  nets stalled around 10–20 layers — deeper models had *higher training error*
+  than shallow ones, the signature of an optimization failure rather than
+  overfitting. The year residual connections appeared, ResNet-152 trained
+  clean. Every modern LLM inherits that: GPT-3's 96 layers are 96 residual
+  blocks, and the network would be untrainable without them.
+- **RNNs forgot long-range context.** Through time, the same weight matrix
+  multiplies the gradient at every step, so distance is depth. At a survival
+  factor of 0.9 per step, a dependency 50 tokens back gets
+  0.9⁴⁹ ≈ **0.006** — 0.6 percent of the signal — and the model simply
+  cannot learn that the word "était" agrees with a subject 50 tokens earlier.
+  LSTMs patched this with a gated cell state (a residual-style highway through
+  time); attention removed the chain entirely.
+- **The exploding twin.** Flip the inequality: factors typically *above* 1 grow
+  just as exponentially. Twenty layers of 1.5 is 1.5<sup>20</sup> ≈ **3,325** —
+  updates thousands of times larger than the weights, loss spiking to NaN.
+  This is why gradient clipping exists: cap the gradient's norm at a threshold
+  and keep the step size sane. Same product, opposite failure.
+- **Saturation kills gradients locally, everywhere.** The layer-scale disease
+  has unit-scale versions all over the stack. A dead ReLU contributes exactly
+  0. And a saturated softmax — one that puts ~1.0 on a single entry — has
+  near-zero derivative for every input, which is precisely why attention
+  divides its scores by √d before the softmax: unscaled dot products saturate
+  it, and the attention layer stops learning where to look.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why do gradients vanish, mechanically — and why does adding layers make it worse?">
+Backprop delivers the gradient through the chain rule, which multiplies one
+local derivative per layer between the loss and the weight being updated. With
+sigmoid or tanh, those factors are typically well below 1 — sigmoid's derivative
+never exceeds 0.25 — so the product decays exponentially with depth: 0.5 per
+layer over 20 layers is about 10⁻⁶. Every added layer appends another sub-1
+factor, so depth directly worsens the decay. It's an optimization failure in
+the backward pass, not a capacity problem in the forward pass — the deep net
+could represent the function; it just never receives the signal to learn it.
+</Drill>
+
+<Drill q="Write the derivative of a residual block and explain exactly why it fixes the problem.">
+For y = x + f(x), the derivative is dy/dx = 1 + f′(x). Chained over many
+layers, the gradient is ∏(1 + f′ₖ) — and expanding that product yields one term
+that is a bare product of 1s: a path through the network that never gets
+multiplied by any branch derivative. So the worst case flips: in a plain stack,
+a saturated layer (f′ → 0) zeroes the whole product; in a residual stack it
+drives the factor to 1, meaning the gradient passes through unchanged. The
+signal no longer needs every layer to cooperate — it needs only the identity
+path, which always exists.
+</Drill>
+
+<Drill q="Why couldn't RNNs learn long-range dependencies, and how do transformers sidestep it?">
+An RNN moves information through time by repeatedly applying the same recurrent
+weight matrix, so the gradient from token t back to token t−50 is a product of
+49 Jacobians. Distance is depth: with per-step survival around 0.9, that's
+0.9⁴⁹ ≈ 0.006, and if the recurrent matrix's spectral radius sits above 1 the
+same product explodes instead. Either way, the useful learning range was a few
+dozen tokens. Attention replaces the sequential chain with direct pairwise
+edges — every position attends to every other, so the gradient path between any
+two tokens has length 1 regardless of distance. That constant path length is a
+core reason the transformer displaced recurrence.
+</Drill>
+
+<Drill q="What does ReLU actually contribute here, and why isn't it sufficient on its own?">
+ReLU's derivative is exactly 1 in its active region, so an active unit passes
+the gradient through unshrunk — unlike sigmoid, whose factor is at most 0.25
+everywhere. Two catches. First, dead ReLU: a unit whose input stays negative
+has derivative exactly 0 and never recovers, a per-unit vanishing problem
+(leaky ReLU and GELU soften this). Second, the activation derivative is only
+half of each factor — the weight matrix is the other half, and a plain deep
+stack's product of weight factors still drifts multiplicatively with nothing
+pinning it to 1. ReLU buys you tens of layers; the hundred-plus layers of a
+modern transformer still need residual connections and normalization.
+</Drill>
+
+<Drill q="Where does layer norm act on this problem — what would break at scale without it?">
+Two places. First, it re-centers and re-scales pre-activations, holding them in
+the activation's responsive zone, where derivatives sit near their peak instead
+of in the saturated flats — it keeps the per-layer factors from collapsing.
+Second, it stabilizes the scale of the residual stream: without normalization,
+each block's output adds variance and the stream's magnitude compounds across
+dozens of layers, pushing later layers toward saturation and the gradient
+product toward the exploding side. Placement matters too — modern LLMs use
+pre-LN (normalize before the block, keeping the residual path itself clean),
+which trains stably without the learning-rate warmup post-LN transformers
+needed.
+</Drill>
+
+<Drill q="Your loss curve suddenly spikes to NaN mid-training. Connect that to this lesson and name the standard mitigation.">
+That's the exploding twin: the same multiplicative chain, with factors above 1.
+The product grows exponentially — 1.5 per layer over 20 layers is ≈ 3,325 — so
+one bad region of parameter space produces a gradient thousands of times larger
+than the weights, the update flings parameters into a divergent regime, and the
+loss goes to NaN. The standard mitigation is gradient clipping: rescale the
+gradient whenever its global norm exceeds a threshold (clip-by-norm ~1.0 is a
+common LLM default), capping the step size while preserving direction. Layer
+norm and residual scaling reduce how often you hit that regime; clipping is the
+seatbelt for when you do.
+</Drill>
+
+</Section>
