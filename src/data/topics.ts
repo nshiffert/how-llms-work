@@ -95,7 +95,7 @@ export const TOPICS: Topic[] = [
     title: 'Positional Encoding',
     hook: 'Attention is order-blind by construction, so position has to be injected — as stacked sine waves, learned vectors, or rotations.',
     category: 'basics',
-    status: 'planned',
+    status: 'ready',
     viz: 'Sinusoid heatmap + RoPE/ALiBi compare',
   },
 

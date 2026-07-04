@@ -1,0 +1,251 @@
+---
+title: Positional Encoding
+category: basics
+hook: Attention is order-blind by construction, so position has to be injected — as stacked sine waves, learned vectors, or rotations.
+crossLinks:
+  - attention
+  - embeddings
+  - context-window
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import PositionalEncodingExplorer from '../../components/islands/PositionalEncodingExplorer.tsx';
+
+<Section n={1} title="What positional encoding is" tag="The problem it solves, and the one-line definition">
+
+A transformer processes every token in parallel — there is no left-to-right
+scan, no memory of "what came before," nothing in the attention arithmetic
+that knows about sequence. The attention score between two tokens is a dot
+product of a query and a key, and a dot product does not care where either
+vector came from. Shuffle the input tokens and the outputs shuffle identically.
+To the raw mechanism, **"the king is here"** and **"here is the king"** are the
+same bag of tokens.
+
+That is not a small defect; it deletes syntax. Word order is most of English
+grammar, and the model literally cannot see it. So position has to be
+**injected into the input** — turned into numbers and mixed into each token's
+vector so that the same token at position 3 and position 17 arrives at
+attention as two *different* vectors.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> A positional encoding
+  is a position-dependent vector, the same width as the token embedding, that is
+  combined with each token's embedding <em>before</em> attention — classically
+  by simple addition — so that token identity and token position both live in
+  the input representation.
+</div>
+
+The vector comes from the same space the Embeddings topic describes — position
+is just added into the row, dimension by dimension. And the choice of *how* to
+encode position turns out to control how far past its training length a model
+can stretch, which is exactly the Context Window story.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Every position becomes a stack of sine waves at different frequencies">
+
+The original transformer's scheme is **sinusoidal**: position `pos` maps to a
+deterministic vector whose entries are sines and cosines at geometrically
+spaced frequencies,
+
+```text
+PE(pos, 2i)   = sin(pos / 10000^(2i/d))
+PE(pos, 2i+1) = cos(pos / 10000^(2i/d))
+```
+
+Words undersell what that looks like. Look at it instead — the whole encoding
+matrix at once, then two positions pulled out and compared, then the modern
+alternatives side by side:
+
+<VizFrame
+  label="Positional encoding explorer"
+  caption="First panel: every position's vector, one row each — see the fast wave bands on the left and the near-frozen ones on the right. Second panel: drag positions A and B; their vectors overlay and the similarity readout updates. Notice the grey similarity-vs-offset curve keeps its shape no matter where A sits — only the offset |A−B| matters. The four cards at the end share one position slider — drag it past the rose training-length line and watch which schemes survive."
+>
+  <PositionalEncodingExplorer client:visible />
+</VizFrame>
+
+Three things the picture is showing you:
+
+- **Each dimension pair is a clock running at its own speed.** The leftmost
+  pair cycles every ~6 positions (wavelength 2π); each pair to the right runs
+  slower, out to a wavelength of thousands of positions. Fast clocks give fine
+  position, slow clocks give coarse position — together the row pins down
+  *exactly one* position, the same way hour, minute, and second hands pin down
+  a time of day.
+- **Nothing is learned in the encoding itself.** The matrix is fixed before
+  training starts. What the model *learns* is how to read it — which
+  attention heads should use which frequency bands.
+- **Relative position falls out for free.** The dot product between two
+  encodings depends only on the *offset* between them, not their absolute
+  location — you verified this in the widget when the grey similarity curve
+  refused to change shape as you dragged A around. Even better, `PE(pos+k)` is a fixed *rotation* of `PE(pos)` (each
+  sin/cos pair turns by `k·ω`), so "attend 3 tokens back" is a linear operation
+  the model can learn once and apply anywhere.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">The four schemes in one breath.</span>{' '}
+  <strong>Sinusoidal</strong>: fixed sin/cos vector added to the embedding
+  (original transformer, d=512 → 256 frequency pairs).{' '}
+  <strong>Learned</strong>: a trainable table with one row per position, added
+  the same way (GPT-2: 1,024 rows; GPT-3: 2,048; BERT: 512).{' '}
+  <strong>RoPE</strong>: no addition at all — rotate each Q and K dimension
+  pair by an angle proportional to position, so relative offset lands directly
+  in the attention dot product (Llama, Qwen, Mistral, most current models).{' '}
+  <strong>ALiBi</strong>: skip vectors entirely and subtract
+  <code>slope × distance</code> from every attention score (BLOOM, MPT).
+</div>
+
+Where this happens in the stack matters: additive schemes (sinusoidal,
+learned) mix position into the embedding **before** the Q/K/V projections the
+Attention topic walks through. RoPE acts later, *inside* attention, on Q and K
+after projection. ALiBi acts later still, on the score matrix itself. Same
+goal, three different insertion points.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="d = 8, positions 0–2, every number real">
+
+Shrink the model width to `d = 8` so the whole vector fits on a line. That
+gives four sin/cos pairs with divisors `10000^(2i/8)` = **1, 10, 100, 1000** —
+wavelengths of 6.3, 63, 628, and 6,283 positions. The first three rows of the
+encoding matrix:
+
+| pos | sin(p/1) | cos(p/1) | sin(p/10) | cos(p/10) | sin(p/100) | cos(p/100) | sin(p/1000) | cos(p/1000) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0.0000 | 1.0000 | 0.0000 | 1.0000 | 0.0000 | 1.0000 | 0.0000 | 1.0000 |
+| 1 | 0.8415 | 0.5403 | 0.0998 | 0.9950 | 0.0100 | 1.0000 | 0.0010 | 1.0000 |
+| 2 | 0.9093 | −0.4161 | 0.1987 | 0.9801 | 0.0200 | 0.9998 | 0.0020 | 1.0000 |
+
+Read a row left to right and you can see the clock speeds: between position 1
+and 2 the first pair swings hard (0.8415 → 0.9093, 0.5403 → **−0.4161**), the
+second pair moves a little, and the last two pairs barely twitch. One step is a
+big deal to the fast clock and nothing to the slow ones.
+
+The generator is a few lines:
+
+```python
+import numpy as np
+
+def pe(pos, d=8, base=10000):
+    i = np.arange(d // 2)
+    angles = pos / base ** (2 * i / d)   # divisors: 1, 10, 100, 1000
+    out = np.empty(d)
+    out[0::2] = np.sin(angles)
+    out[1::2] = np.cos(angles)
+    return out
+
+np.round(pe(1), 4)
+# array([0.8415, 0.5403, 0.0998, 0.995 , 0.01  , 1.    , 0.001 , 1.    ])
+
+# similarity depends ONLY on the offset, not the location:
+pe(7) @ pe(8),  pe(30) @ pe(31)   # (3.5353, 3.5353)   offset 1
+pe(7) @ pe(9),  pe(30) @ pe(32)   # (2.5637, 2.5637)   offset 2
+pe(7) @ pe(7)                     # 4.0  (= d/2, since sin² + cos² = 1)
+```
+
+That last block is the property the widget's similarity curve plots: the dot
+product between `PE(7)` and `PE(8)` is **3.5353**, and between `PE(30)` and
+`PE(31)` it is *exactly the same* 3.5353. The encoding hands attention a clean
+"how far apart are we?" signal at any absolute location. This is what the
+input to the model actually is: token embedding **+** this vector, summed
+elementwise, and only then projected to Q, K, and V.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Order blindness, and three ways to die past the training length">
+
+- **No positional encoding: syntax is gone.** Without the injected vector,
+  attention is permutation-equivariant — "the king is here" and "here is the
+  king" produce identical representations up to reordering. The model can still
+  do bag-of-words topic matching; it cannot do grammar, negation scope, or
+  "who did what to whom."
+- **Learned encodings hit a wall, hard.** GPT-2 has exactly 1,024 position
+  rows. Position 1,025 is not "poorly encoded" — the row *does not exist*.
+  Feeding a longer sequence is an out-of-bounds lookup; the context length is a
+  hard architectural ceiling. This is the worst extrapolation behavior of the
+  four schemes.
+- **Sinusoidal encodings extrapolate in theory, badly in practice.** The
+  formula produces a perfectly valid vector at position 50,000 — but the model
+  only learned to *interpret* the phase combinations it saw during training.
+  Past the training length the vectors are novel inputs, and quality degrades
+  fast. Defined ≠ understood.
+- **RoPE stretches — with tricks — and that is why it won.** Because RoPE
+  encodes only relative angles, positions can be rescaled after training:
+  position interpolation, NTK-aware scaling, and YaRN squeeze longer sequences
+  into the angle range the model already understands. That is the machinery
+  behind stretching a model trained at 8K out to 128K — the long-context story
+  in the Context Window topic. ALiBi extrapolates natively (the distance
+  penalty just keeps growing) but gives up long-range precision to do it.
+- **A subtle one: additive encodings share the embedding space.** The
+  position vector is *summed into* the same dimensions carrying token meaning
+  (the Embeddings topic's space) — the model must learn to keep "what" and
+  "where" separable inside one vector. RoPE sidesteps this entirely by never
+  touching the values, which is part of why it composes better at scale.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why is attention order-blind in the first place? Point at the exact operation.">
+The attention score is `q·k / √d` — a dot product of two projected vectors.
+Nothing in that product references an index; if you permute the input tokens,
+the score *matrix* permutes with them and every output vector is unchanged, just
+reordered (permutation equivariance). Order blindness is not a bug of a
+particular model, it is a property of the operation — so position must be added
+to the representations, because it will never emerge from the mechanism.
+</Drill>
+
+<Drill q="Where exactly is position injected, for each of the four schemes?">
+Sinusoidal and learned encodings are added to the token embedding **before**
+the Q/K/V projections — position enters once, at the bottom, and rides through
+the whole stack. RoPE is applied **inside** each attention layer: Q and K are
+rotated after projection (V is untouched). ALiBi is latest of all: a
+`−slope·distance` bias added directly to the pre-softmax attention scores.
+Knowing the insertion point is the difference between memorizing names and
+understanding the design space: embedding → projections → scores.
+</Drill>
+
+<Drill q="Sinusoidal vs learned vs RoPE vs ALiBi — one line each, with the trade-off.">
+Sinusoidal: fixed sin/cos vector added to the embedding — free, deterministic,
+extrapolates poorly. Learned: trainable per-position rows — maximally flexible
+inside the trained range, *undefined* one token past it. RoPE: rotate Q/K by
+position-proportional angles so the dot product sees relative offset —
+best-in-class long-context behavior via rescaling tricks, now the default.
+ALiBi: no vectors, just a distance penalty on attention scores — extrapolates
+natively, but encodes nothing about position except "farther is fainter."
+</Drill>
+
+<Drill q="Why does a learned positional embedding fail at position max+1 when a sinusoidal one doesn't?">
+A learned encoding is a lookup table with a fixed number of rows; position
+max+1 is an index that has no row — the failure is structural, not statistical.
+The sinusoidal formula is a function, defined for every real position, so it
+always *produces* a vector — but the model has never seen those phase
+combinations, so it misreads them. One scheme fails by absence, the other by
+inexperience. Neither actually works past the training length, which is why the
+question "how was this model's context extended?" is really a question about
+its positional scheme.
+</Drill>
+
+<Drill q="A model was trained at 8K context and ships with 128K. What happened, mechanically?">
+Almost certainly RoPE plus a rescaling trick. RoPE encodes position as rotation
+angles of Q/K pairs, and attention only sees angle *differences* — so you can
+compress 128K of positions into the angle range the model learned at 8K
+(position interpolation), or rescale the frequency base so slow dimensions
+stretch while fast ones keep local precision (NTK-aware scaling / YaRN),
+usually followed by a short fine-tune. This works precisely because RoPE is
+relative; a learned absolute table has no equivalent move — there is nothing to
+rescale, only rows that don't exist.
+</Drill>
+
+<Drill q="The same token appears at positions 3 and 17. Are its Q/K/V vectors the same or different, and why does that matter?">
+Different. The input to the projections is `embedding(token) + PE(pos)` (or,
+for RoPE, the projections get rotated by a position-dependent angle), so the
+same token at two positions yields different queries, keys, and values.
+That is the entire point: it lets attention distinguish "king at position 3"
+from "king at position 17," which is what makes word order — and therefore
+syntax — visible to a mechanism that is otherwise a bag of vectors.
+</Drill>
+
+</Section>
