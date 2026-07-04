@@ -1,0 +1,254 @@
+---
+title: Beam Search vs Greedy
+category: generation
+hook: Greedy commits to the locally-best token and can’t take it back; beam keeps k hypotheses alive to escape that trap.
+crossLinks:
+  - temperature
+  - top-k-top-p
+  - autoregressive-vs-masked
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import BeamSearchExplorer from '../../components/islands/BeamSearchExplorer.tsx';
+
+<Section n={1} title="What decoding strategies are" tag="The model outputs a distribution — someone still has to pick the token">
+
+A language model never outputs text. Each forward pass ends in a softmax over
+the whole vocabulary — for GPT-4o, a probability for every one of ~200,000
+tokens — and that distribution is the model's entire opinion about what comes
+next. Turning it into an actual token is a separate layer called **decoding**,
+and the choice of decoding strategy changes the output as much as the model
+does. This page is about the two deterministic strategies; the sampling family
+(temperature, top-k, top-p) has its own pages.
+
+**Greedy decoding** is the obvious move: take the single most probable token,
+append it, run the model again, repeat. That generate-append-recondition loop
+is **autoregressive generation** — every decoding strategy on this page, and
+every sampling strategy on the temperature and top-k / top-p pages, is a
+different way of steering it. Greedy is fast and deterministic, but it is
+myopic — once a token is emitted there is no taking it back, so a token that
+looks best *right now* can commit the model to a continuation that is worse
+*overall*.
+
+**Beam search** fixes exactly that. Instead of one running sequence it keeps
+**k** of them alive — the "beam" — and it ranks them not by their latest token
+but by the **cumulative probability of the whole sequence so far**. A token
+that is locally second-best survives if the sequence it belongs to is winning,
+and at the end the model returns the best complete sequence it found.
+
+One misconception to kill before it settles: **beam search is not the
+"creative" option.** It is the opposite. Beam search is a deterministic
+approximation of "find the most probable sequence" — the same prompt yields
+the same output every time, and high-probability text is by nature safe text.
+When you want diversity or surprise you don't widen the beam, you switch to
+sampling — that's what temperature and top-k / top-p are for.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Greedy decoding emits
+  the argmax of the next-token distribution at every step. Beam search maintains
+  the <strong>k</strong> highest-scoring partial sequences, scored by
+  <em>cumulative log-probability of the entire sequence</em>, expanding all of
+  them in parallel and pruning back to k after each step. Greedy is exactly beam
+  search with <strong>k = 1</strong>.
+</div>
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Expand k×V continuations → keep top k overall → repeat">
+
+One beam-search step has two moves, and both are visible in the widget below.
+
+First, **expand**: every one of the k live hypotheses scores every possible
+next token, producing k × V candidate continuations (V is the vocabulary size —
+4 in the toy below, ~200,000 in GPT-4o). Each candidate's score is its parent's
+score plus the log-probability of the new token.
+
+Second, **prune**: from all k × V candidates, keep the k with the highest
+cumulative score. This is **one global cut across every expansion**, not
+"top k per parent" — if one hypothesis has the three best continuations, it
+keeps all three and some other hypothesis dies. Repeat until the sequences hit
+an end-of-sequence token or a length limit, then return the single best.
+
+The scores are summed in log space for a mechanical reason: the probability of
+a sequence is a product of per-token probabilities, all below 1, and long
+products underflow floating point — around 40 tokens of p ≈ 0.1 each in 32-bit,
+a few hundred in 64-bit. Summing ln p instead of multiplying p is the same
+ranking without the underflow — which is why every score in the widget is a
+negative number that only gets more negative as the sequence grows.
+
+<VizFrame
+  label="Beam search trellis · width 1/3/5/10"
+  caption="Set a beam width and alternate expand / prune. Expand scores every next token for every live hypothesis; prune makes one global top-k cut on cumulative ln p (the ranked list shows the cut line). Pruned paths fade gray; the chosen path turns green. Run it at width 1 first — greedy takes mat and ends at p = 0.063. Then width 3: the beam keeps rug alive at step 1 even though it lost to mat, and its confident continuation wins at p = 0.168."
+>
+  <BeamSearchExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Real-world widths.</span> Production
+  machine-translation and summarization systems run beam widths of roughly
+  <strong>3–10</strong> — beyond that, quality typically gets <em>worse</em>,
+  not better (more on that in "What breaks"). Greedy is beam width 1. Chat
+  assistants generally use neither: they sample from the distribution, because
+  open-ended conversation wants variety, not the argmax.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="The greedy trap, with the actual numbers">
+
+The widget's trellis is small enough to trace by hand. After the prompt
+"The cat sat on the", the model's next-token distribution starts with
+`mat` at 0.45 and `rug` at 0.40. Greedy takes `mat` — and that's the trap,
+because the model is *uncertain* about what follows `mat` (its best
+continuation, `and`, only gets 0.35) but *confident* about what follows `rug`
+(`and` gets 0.70). Watch the cumulative log-probabilities diverge:
+
+| step | greedy (k = 1) emits | greedy cumulative | beam k = 3 frontier, ranked by ln p |
+| --- | --- | --- | --- |
+| 1 | `mat` (p = 0.45) | ln p = −0.80 | `mat` −0.80 · `rug` −0.92 · `floor` −2.30 |
+| 2 | `and` (p = 0.35) | ln p = −1.85 | `rug and` **−1.27** · `mat and` −1.85 · `mat ,` −2.00 |
+| 3 | `purred` (p = 0.40) | ln p = −2.76 | `rug and purred` **−1.78** · `rug and slept` −2.66 · `mat and purred` −2.76 |
+
+At step 2 the beam expanded its 3 hypotheses over 4 tokens each — 12
+candidates — and kept the top 3 *of the whole pool*. `rug and` (0.40 × 0.70 =
+0.28) jumped past greedy's `mat and` (0.45 × 0.35 = 0.1575) on cumulative
+probability, even though `rug` lost the first step. The final scores:
+
+- greedy: "The cat sat on the **mat and purred**" — p = 0.45 × 0.35 × 0.40 = **0.063**
+- beam 3: "The cat sat on the **rug and purred**" — p = 0.40 × 0.70 × 0.60 = **0.168**
+
+Beam search found a sequence **2.7× more probable** by tolerating a locally
+weaker token for one step. That is the entire value proposition, and the whole
+algorithm fits in a dozen lines:
+
+```python
+import math
+
+# toy next-token distributions after "The cat sat on the"
+LM = {
+    (): {"mat": 0.45, "rug": 0.40, "floor": 0.10, "keyboard": 0.05},
+    ("mat",): {"and": 0.35, ",": 0.30, "quietly": 0.20, "again": 0.15},
+    ("rug",): {"and": 0.70, "by": 0.15, ",": 0.10, "again": 0.05},
+    ("floor",): {"and": 0.40, ",": 0.30, "near": 0.20, "again": 0.10},
+    ("mat", "and"): {"purred": 0.40, "slept": 0.30, "waited": 0.20, "yawned": 0.10},
+    ("rug", "and"): {"purred": 0.60, "slept": 0.25, "stretched": 0.10, "yawned": 0.05},
+    ("mat", ","): {"then": 0.35, "the": 0.30, "its": 0.20, "a": 0.15},
+    # ...the full trellis defines a distribution for every prefix
+}
+
+def beam_search(k, steps=3):
+    beams = [((), 0.0)]                       # (tokens, cumulative log-prob)
+    for _ in range(steps):
+        candidates = [
+            (toks + (tok,), score + math.log(p))
+            for toks, score in beams if toks in LM
+            for tok, p in LM[toks].items()    # every hypothesis × every token
+        ]
+        # ONE global sort over all k×V candidates — keep top k overall
+        beams = sorted(candidates, key=lambda c: c[1], reverse=True)[:k]
+    return beams[0]
+
+beam_search(k=1)   # (('mat', 'and', 'purred'), -2.765)  -> p = 0.063
+beam_search(k=3)   # (('rug', 'and', 'purred'), -1.784)  -> p = 0.168
+```
+
+The number each hypothesis carries is the log-probability of the **whole
+sequence** — never just the latest token. That single fact is what makes beam
+search able to recover from a bad first pick, and it's the detail interviewers
+poke at.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="The trap, the blandness, the length bias, and the bill">
+
+- **Greedy gets locally trapped — and loops.** Argmax-every-step has no
+  mechanism to escape a rut: once the most likely continuation of a phrase is
+  the phrase again, greedy repeats it verbatim ("I'm sorry. I'm sorry. I'm
+  sorry."). The trellis above is the small version; degenerate repetition is
+  the production symptom.
+- **Beam search is deterministic.** Same prompt, same weights, same output,
+  every time. For translation that's a feature. For a chatbot, story writing,
+  or brainstorming it's fatal — you get the single blandest high-probability
+  answer, and regenerating gives you the identical one. Diversity requires
+  sampling: temperature to reshape the distribution, top-k / top-p to choose
+  where to cut it.
+- **Vanilla beam search favors short sequences.** Every added token adds a
+  negative number to the cumulative ln p, so a 5-token sequence almost always
+  outscores a 20-token one. Uncorrected, beam search ends sentences as early
+  as it can. The standard patch is **length normalization** — divide the score
+  by lengthᵅ with α ≈ 0.6–0.7 (the Google NMT recipe) — which is a hack bolted
+  on precisely because the raw objective is biased.
+- **Wider is not better.** Pushing the width past ~10 usually *lowers* output
+  quality in translation benchmarks: the search gets better at its stated
+  objective (high-probability text) and that objective drifts away from what
+  humans rate as good — shorter, safer, blander output wins the argmax. The
+  most-probable sequence is simply not the best sequence, and beam search can
+  only ever chase the former.
+- **You pay k× compute.** Each step runs the model over k hypotheses instead
+  of one (batched in practice, plus k copies of the KV cache). Beam width 5 is
+  roughly 5× the decode FLOPs and memory of greedy — which is why
+  latency-sensitive systems (chat, autocomplete) don't use it.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="The score a beam-search hypothesis carries — is it the probability of the latest token or the whole sequence?">
+The whole sequence: the sum of log-probabilities of every token in the
+hypothesis so far (equivalently, the product of their probabilities). That's
+the entire point — a hypothesis whose latest token was weak can still lead if
+its sequence-level score is highest, which is exactly how the beam recovers
+from greedy's trap. Per-token scoring would just be k copies of greedy.
+</Drill>
+
+<Drill q="You have 3 hypotheses and expand each over the vocabulary. Do you keep the top 3 per hypothesis (9 total) or the top 3 overall?">
+Top 3 overall — one global cut across all 3 × V candidates. That means one
+strong hypothesis can claim multiple slots (in the worked example, `mat`
+claimed two of three slots at step 2) and a weak hypothesis can lose all of
+its children in a single prune. Per-parent pruning would force the beam to
+keep descendants of doomed prefixes.
+</Drill>
+
+<Drill q="When do you reach for greedy, beam search, or sampling?">
+Greedy: latency-sensitive, short outputs where a locally-good answer is fine —
+autocomplete, classification-style generation. Beam search: tasks with a
+roughly correct answer where sequence-level optimality matters — machine
+translation, summarization, speech-to-text — at widths around 3–10. Sampling
+(temperature, top-k, top-p): open-ended generation — chat, stories,
+brainstorming — where determinism and blandness are the failure modes and you
+want draws from the distribution, not its argmax.
+</Drill>
+
+<Drill q="Why is beam search a poor choice for creative writing, even at large widths?">
+Two compounding reasons. It's deterministic — same prompt, same story, every
+regeneration. And it's mode-seeking: it optimizes for the highest-probability
+sequence, and the most probable text is by construction the most typical,
+safest text in the training distribution. Widening the beam makes it better at
+finding bland text, not worse. Creativity comes from sampling the distribution
+(temperature reshapes it, top-k / top-p bound the tail), not from more
+exhaustive argmax.
+</Drill>
+
+<Drill q="Why does vanilla beam search prefer short outputs, and what's the standard fix?">
+Every token's log-probability is negative, so the cumulative score strictly
+decreases with length — a short sequence beats a long one almost by default,
+and the beam learns to slam into end-of-sequence early. The fix is length
+normalization: rank by score divided by lengthᵅ, with α ≈ 0.6–0.7 in the
+Google NMT formulation. It's a correction bolted onto the objective, which is
+a hint that "most probable sequence" was never quite the thing we wanted.
+</Drill>
+
+<Drill q="Is greedy decoding a special case of beam search? What exactly changes as you grow k?">
+Yes — greedy is beam search with k = 1: one hypothesis, expand, keep the top 1,
+which is just argmax. Growing k widens the explored slice of the exponentially
+large sequence tree (k × V candidates per step instead of V) at k× the compute,
+converging in the limit toward exhaustive search for the globally most probable
+sequence. Quality does not converge with it: past widths of ~10 the outputs
+get shorter and blander, because the true argmax sequence isn't what humans
+want. k trades compute for search fidelity toward an objective that's only a
+proxy.
+</Drill>
+
+</Section>

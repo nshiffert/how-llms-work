@@ -147,7 +147,7 @@ export const TOPICS: Topic[] = [
     title: 'Beam Search vs Greedy',
     hook: 'Greedy commits to the locally-best token and can’t take it back; beam keeps k hypotheses alive to escape that trap.',
     category: 'generation',
-    status: 'planned',
+    status: 'ready',
     viz: 'Search tree, beam-width slider',
   },
   {
