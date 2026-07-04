@@ -20,7 +20,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 2  | embeddings               | basics     | done   | [outline](outlines/embeddings.md)         | 17d3317 |
 | 3  | positional-encoding      | basics     | done   | [outline](outlines/positional-encoding.md)| fc25ffe |
 | 4  | softmax                  | math       | done   | [outline](outlines/softmax.md)            | 408cda6 |
-| 5  | cross-entropy            | math       | done   | [outline](outlines/cross-entropy.md)      |        |
+| 5  | cross-entropy            | math       | done   | [outline](outlines/cross-entropy.md)      | 643cb2f |
 | 6  | kl-divergence            | math       | todo   | [outline](outlines/kl-divergence.md)      |        |
 | 7  | vanishing-gradients      | math       | todo   | [outline](outlines/vanishing-gradients.md)|        |
 | 8  | beam-vs-greedy           | generation | todo   | [outline](outlines/beam-vs-greedy.md)     |        |
