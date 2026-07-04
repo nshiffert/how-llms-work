@@ -87,7 +87,7 @@ export const TOPICS: Topic[] = [
     title: 'Embeddings',
     hook: 'A lookup table that starts as noise and ends up encoding meaning as geometry — direction is semantics.',
     category: 'basics',
-    status: 'planned',
+    status: 'ready',
     viz: '2D projection + nearest-neighbor search',
   },
   {

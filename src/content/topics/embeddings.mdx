@@ -1,0 +1,276 @@
+---
+title: Embeddings
+category: basics
+hook: A lookup table that starts as noise and ends up encoding meaning as geometry — direction is semantics.
+crossLinks:
+  - tokenization
+  - attention
+  - positional-encoding
+  - rag
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import EmbeddingSpaceExplorer from '../../components/islands/EmbeddingSpaceExplorer.tsx';
+
+<Section n={1} title="What an embedding is" tag="From an arbitrary integer id to a point in continuous space">
+
+Tokenization ends with a list of integer ids — and an id carries no meaning at
+all. Token 3,290 is not "similar" to token 3,291; the numbering is an accident
+of the merge order the tokenizer learned. A neural network needs inputs it can
+do arithmetic on: vectors, where *near* can mean *related* and directions can
+carry structure. The embedding layer is the bridge from one to the other, and
+it is mechanically the simplest layer in the entire model.
+
+It is a lookup table. One matrix, one row per vocabulary token, each row a
+vector of a few hundred to a few thousand numbers. Token id 3,290 arriving at
+the model means: copy out row 3,290. No multiplication, no activation — an
+array index. Everything interesting about the layer is in *what ends up in the
+rows*, not in what the layer computes.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> An embedding layer is a
+  learned matrix <em>E</em> with shape <strong>vocabulary&nbsp;×&nbsp;model
+  width</strong> (e.g. 50,257&nbsp;×&nbsp;768). Token id <em>i</em> selects row
+  <em>E[i]</em>. The rows are ordinary trainable parameters — the "meaning" of a
+  token <em>is</em> its row's position in that continuous space.
+</div>
+
+That row is the vector attention operates on: the positional encoding is added
+directly onto it before the first layer, and the query, key, and value the
+attention topic describes are linear projections of the result. So the embedding table is literally the model's
+interface — the only place where the discrete world of token ids touches the
+continuous world everything downstream lives in.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Random noise → gradients nudge rows in place → geometry becomes meaning">
+
+At initialization the table is meaningless by construction: every row is small
+Gaussian noise. "king" and "queen" start as two unrelated random directions.
+
+Training never replaces that table with something smarter. There is **no
+learned function that maps random vectors to good ones** — the rows themselves
+are parameters, and backprop **updates them in place**. Every time a token
+appears in a training batch, the gradient flows all the way back to its row and
+nudges it a tiny step downhill — the learning rate that sets the step size is
+on the order of 1e-4 in large-model pretraining — millions of times over. The vector you
+inspect after training is the *same array slot* that held noise on day one,
+dragged across the space one update at a time.
+
+The reason that produces geometry-as-meaning is the training objective. Two
+tokens that occur in interchangeable contexts ("king"/"queen", "run"/"running")
+keep receiving near-identical gradient pressure — the model does better on
+next-token prediction when it treats them similarly, so their rows get pulled
+toward each other. Meaning is never programmed in; it precipitates out of
+co-occurrence statistics. By the end, *direction* in the space encodes semantic
+relationships, which is why cosine similarity — the angle between two rows —
+is the standard measure of relatedness.
+
+The explorer below is built on **real vectors**: the public word2vec sample
+(10,000 words, 200 dimensions) that ships with TensorFlow's Embedding
+Projector, projected to 2D. The neighbor lists are computed in the full
+200-dimensional space, not the flattened picture.
+
+<VizFrame
+  label="Embedding space · real word2vec vectors, 10K words × 200 dims"
+  caption="Trained space: search or click a word and its top-8 cosine neighbors light up — notice king pulls queen, emperor, throne (0.68–0.73), and run pulls running, runs, ran. Watch training: press Train to see every vector start as random noise and get dragged in place to its trained position — and watch the amber rare words stall near their init. That stall is Section 4."
+>
+  <EmbeddingSpaceExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">One table, two meanings of "embedding."</span>
+  Everything above is a <strong>token</strong> embedding: one row per vocabulary
+  entry, fetched by index. The "embeddings" behind vector search and RAG are
+  <strong>sentence embeddings</strong>: one vector for a whole passage, produced
+  by running the full text <em>through</em> a model and pooling an output-layer
+  representation (or, cruder, averaging token rows / taking the last token's
+  state). Same word, different mechanism — a lookup versus a forward pass. The
+  RAG topic builds on the second kind.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="The real tables — 38.6M parameters of GPT-2 — and cosine neighbors in code">
+
+First, the table sizes. These are exact, not estimates:
+
+| model | vocabulary | width | embedding params | share of model |
+| --- | --- | --- | --- | --- |
+| GPT-2 small | 50,257 | 768 | 50,257 × 768 = **38,597,376** | ~31% of 124M |
+| Llama 3 8B | 128,256 | 4,096 | 128,256 × 4,096 = **525,336,576** | ~6.5% of 8.03B |
+
+Two things to read off that table. In a small model the lookup table is a
+*huge* fraction of the weights — nearly a third of GPT-2 is token rows. And the
+cost scales with vocabulary × width, which is why the ~200K-token vocabulary
+discussed in the tokenization topic is a real trade-off, not a free win. GPT-2
+reuses the same matrix at the output to score next-token logits (*tied*
+embeddings); Llama 3 8B unties them and pays for two tables — over a billion
+parameters, 13% of the model, spent purely on the vocabulary interface.
+
+The mechanics fit in a screen of NumPy. This runs against the same public
+word2vec sample as the explorer above, and the outputs shown are its real
+outputs:
+
+```python
+import numpy as np
+
+# the real table: 10,000 words x 200 dims, float32
+E = np.fromfile("word2vec_10000_200d_tensors.bytes",
+                dtype=np.float32).reshape(10000, 200)
+vocab = [l.split("\t")[0] for l in
+         open("word2vec_10000_200d_labels.tsv").read().splitlines()[1:]]
+idx = {w: i for i, w in enumerate(vocab)}
+
+v = E[idx["king"]]        # the ENTIRE embedding step: one row copy, shape (200,)
+
+# cosine nearest neighbors = normalize rows, then one matrix-vector product
+En = E / np.linalg.norm(E, axis=1, keepdims=True)
+def neighbors(w, k=5):
+    sims = En @ En[idx[w]]
+    return [(vocab[j], round(float(sims[j]), 3)) for j in np.argsort(-sims)[1:k+1]]
+
+neighbors("king")  # [('kings', 0.73), ('queen', 0.689), ('emperor', 0.688),
+                   #  ('throne', 0.683), ('son', 0.68)]
+neighbors("run")   # [('running', 0.736), ('runs', 0.699), ('ran', 0.643),
+                   #  ('operate', 0.628), ('operating', 0.617)]
+```
+
+The similarity values behave like a meaning dial, not a binary:
+
+| pair | cosine | relationship |
+| --- | --- | --- |
+| run · running | **0.736** | inflections of one verb |
+| king · queen | **0.689** | same role, different gender |
+| king · prince | 0.646 | related role |
+| king · water | 0.351 | basically unrelated |
+
+Nearness is only half the hook. "Direction is semantics" means the *offsets*
+between vectors are meaningful too — and that is testable with arithmetic. Take
+the vector for king, subtract man, add woman, and search for the nearest row to
+the result. In this exact dataset:
+
+| arithmetic | nearest row (cosine) | the direction it reuses |
+| --- | --- | --- |
+| king − man + woman | **queen** (0.650) | gender, applied to a royal |
+| paris − france + germany | **berlin** (0.726) | capital-of |
+| walked − walk + run | **ran** (0.601) | past-tense |
+
+```python
+v = En[idx["king"]] - En[idx["man"]] + En[idx["woman"]]
+sims = En @ (v / np.linalg.norm(v))
+# top hit (excluding the inputs): 'queen', 0.65
+```
+
+Nobody trained a "capital-of" direction into this table — it fell out of
+next-token statistics, and the *same offset* works across country after
+country. That is the hook made literal: relationships are encoded as reusable
+directions in the space. (Honesty note: analogy arithmetic is cleanest in
+word-level spaces like word2vec; in a modern LLM's subword token table it is
+noisier, because rows hold token fragments, not tidy whole words.)
+
+One caveat that matters for LLMs: this sample is *word*-level, so "running" has
+its own row. A BPE tokenizer may or may not give it one — "running" might be a
+single token or `run` + `ning` depending on the learned merges. When a word is
+split, no single row holds its meaning; the model assembles it in the attention
+layers from the pieces.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Memory that scales with vocabulary, rows that never got trained, rows that drift">
+
+- **The table eats memory linearly in vocabulary size.** Every token added to
+  the vocabulary is another full row of width *d* — at Llama 3 width, each
+  token costs 4,096 parameters at the input and (untied) 4,096 more at the
+  output softmax. Doubling the vocabulary to help non-English text or code
+  doubles that entire bill. This is the "bigger vocab vs. bigger layer" dial
+  from the tokenization topic, seen from the parameter side.
+- **Rare tokens keep near-random embeddings.** A row only moves when its token
+  appears in a batch. In the sample above, "the" was seen 1,061,396 times and
+  the rarest word just 126 — an 8,400× gap in gradient updates, and the real
+  vocabulary tail is far worse. A token seen a handful of times ends up
+  barely displaced from its Gaussian init: the model genuinely does not know
+  what it means. Push that to the extreme and you get glitch tokens —
+  `SolidGoldMagikarp` earned a vocabulary slot from the *tokenizer's* corpus
+  but almost never occurred in the *model's* training data, so feeding its
+  essentially untrained row into the network produces unhinged output.
+- **Fine-tuning moves rows for everyone.** Update the embedding table on a
+  narrow domain and you are dragging shared vectors toward that domain's usage.
+  Words with a general meaning and a niche meaning ("margin," "vector,"
+  "python") drift toward the niche one, degrading the model everywhere else —
+  the embedding-layer face of catastrophic forgetting. This is one reason
+  adapter methods often freeze the embedding table entirely.
+- **Averaged token rows are a bad sentence embedding.** The tempting shortcut —
+  embed a phrase by averaging its token rows — throws away word order and
+  composition: "not good" averages to roughly the same point as "good," since
+  the rows for *not*, and everything else, just blend. Production retrieval
+  uses a forward pass through a trained encoder precisely because the lookup
+  table alone cannot represent how words modify each other.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="During training, do the random initial vectors get mapped to new vectors by some learned function, or what exactly happens?">
+Neither mapped nor replaced: the rows are themselves parameters and backprop
+updates them **in place**. The gradient of the loss with respect to the
+embedding matrix is nonzero only at the rows whose tokens appeared in the batch
+— so each step nudges exactly those rows, and a token's final vector is its
+initial noise plus the accumulated sum of every nudge it ever received. There
+is no separate "embedding function" being learned; the table is the learning.
+</Drill>
+
+<Drill q="A candidate says 'we embed our documents with the model's embedding layer.' What's wrong with that sentence?">
+It conflates two mechanisms. The embedding *layer* is a per-token lookup — it
+can only fetch rows, one per token, with no notion of composition. Document or
+sentence embeddings for retrieval come from a *forward pass*: run the text
+through a (usually contrastively trained) encoder and pool an output
+representation. Averaging the lookup rows instead loses order and negation —
+"not good" lands next to "good." In a RAG pipeline the retrieval quality lives
+or dies on this distinction.
+</Drill>
+
+<Drill q="Why does direction encode meaning at all? Nobody programmed 'king relates to queen' into the table.">
+The objective did it. Next-token prediction rewards treating tokens that occur
+in interchangeable contexts interchangeably, so those tokens receive
+near-identical gradients and their rows converge toward the same region —
+co-occurrence statistics precipitate into geometry. That's also why cosine
+similarity is the right metric: vector *norm* correlates with token frequency
+and training dynamics, while the *direction* is where the contextual signal
+accumulates, so you compare angles and ignore lengths.
+</Drill>
+
+<Drill q="Why do rare tokens have bad embeddings, and what's the pathological endpoint?">
+A row only receives gradient when its token appears in a batch. A token seen
+100 times gets 100 nudges against millions for a common token, so its row stays
+close to Gaussian noise — the model has no real representation for it. The
+endpoint is the glitch token: frequent enough in the tokenizer's corpus to earn
+a vocabulary slot, near-absent from the model's training data, so inference on
+it feeds raw noise into every layer. Same failure at smaller scale: typos,
+rare names, and niche jargon all ride under-trained rows.
+</Drill>
+
+<Drill q="Is 'running' one embedding row or two? And what does your answer imply about where meaning lives?">
+Depends entirely on the tokenizer's learned merges — a BPE vocabulary might
+keep `running` whole or split it into `run` + `ning`. If it's split, there is
+no row anywhere that means "running"; the model reconstructs the concept in
+context, by attention mixing the pieces. Which is the general lesson: the
+embedding table holds meaning only at token granularity, and everything
+coarser is assembled downstream.
+</Drill>
+
+<Drill q="Random init seems wasteful — why not initialize semantically similar tokens near each other?">
+Chicken-and-egg: the similarity structure is exactly what training discovers,
+so you'd need trained embeddings to initialize embeddings. Random small
+Gaussian init works because the accumulated gradient signal completely
+dominates the starting point for any token seen often enough — init only
+leaves a fingerprint on tokens training barely touches, which is the rare-token
+problem, and no init scheme fixes missing data. (The exception that proves the
+rule: when *extending* a vocabulary for fine-tuning, new rows are often
+initialized as the mean of their subword pieces' existing rows — semantic init
+from an already-trained table.)
+</Drill>
+
+</Section>
