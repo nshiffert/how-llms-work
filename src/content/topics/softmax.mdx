@@ -1,0 +1,245 @@
+---
+title: Softmax
+category: math
+hook: The function that turns any vector of scores into a probability distribution — and exaggerates the winner on the way.
+crossLinks:
+  - attention
+  - temperature
+  - cross-entropy
+  - distillation
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import SoftmaxExplorer from '../../components/islands/SoftmaxExplorer.tsx';
+
+<Section n={1} title="What softmax is" tag="From arbitrary scores to a probability distribution">
+
+Everywhere a model has to make a choice, it first produces raw real-valued
+scores. In attention, the score is a dot product between a query and a key —
+it can be 5.3, or −2.1, or 0. At the output layer, the score is a **logit** for
+each token in the vocabulary. Raw scores are useless for deciding: they can be
+negative, they don't sum to anything in particular, and there is no sense in
+which a score of 5 "is" a probability. What the model needs is a **probability
+distribution** — every value between 0 and 1, all of them summing to exactly 1
+— because that is what a weighted average needs, what sampling needs, and what
+the loss function needs.
+
+Softmax is the standard bridge, and it is one line:
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Given scores
+  $s_1, \dots, s_n$, softmax exponentiates each one and divides by the sum of
+  all the exponentials:
+  $\mathrm{softmax}(s_i) = e^{s_i} \big/ \sum_j e^{s_j}$.
+  Every output lands strictly between 0 and 1, the outputs sum to exactly 1,
+  and the function is differentiable everywhere — so it can live inside a
+  network trained by backpropagation.
+</div>
+
+Those three properties are the entry requirements, but they are not what makes
+softmax interesting — plenty of functions can normalize numbers. What softmax
+adds is **sharpness**: because of the exponential, the largest score doesn't
+just get the largest share, it gets a *disproportionately* large share, and the
+gap grows fast as scores separate. That winner-takes-most behavior is the whole
+point. It is what lets attention commit to the token that matters instead of
+smearing itself evenly over the sequence.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Exponentiate, then normalize — the exponent does all the work">
+
+Two steps. First, push every score through $e^x$. Second, divide each result by
+the sum so everything adds to 1. The division is bookkeeping; the exponential
+is where the behavior comes from, and it has one property worth burning in:
+**adding 1 to any score multiplies its weight relative to every other token by
+$e \approx 2.72$**, no matter what the other scores are. Equal *differences* in
+scores become equal *ratios* in the output. A score that leads by 3 doesn't win by 3 — it wins by a factor
+of $e^3 \approx 20$.
+
+Two consequences follow directly from that, and both come up constantly:
+
+- **Shifting all scores changes nothing.** Add the same constant $c$ to every
+  score and it factors out: $e^{s_i + c} = e^c \cdot e^{s_i}$ appears in both
+  the numerator and the denominator and cancels. Only the *differences* between
+  scores matter. This is also why the overflow fix in section 4 is free.
+- **Scaling all scores changes sharpness.** Divide every score by a constant
+  $T$ and the gaps shrink, so the output flattens toward uniform; multiply and
+  it sharpens toward putting everything on the winner. The output still sums
+  to 1 either way — normalization happens after the scaling, so no scaling can
+  break it. That divisor is exactly what temperature is.
+
+Feel both of those below. The right-hand panel is the naive alternative —
+just divide each score by the sum, no exponential — and the contrast is the
+fastest way to understand why the exponential is there.
+
+<VizFrame
+  label="Softmax vs plain division"
+  caption="Drag the three score bars and watch both normalizations respond. Notice how softmax hands the leader almost everything while plain division moves proportionally — then drag a score negative and watch plain division produce a negative “probability” while softmax doesn't care. The temperature slider rescales the scores before softmax: below 1 sharpens, above 1 flattens, and the output always still sums to 1."
+>
+  <SoftmaxExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Why the exponential specifically?</span>
+  It is essentially the only choice — any other exponential base is just
+  softmax at a different temperature — and it has a stack of properties you
+  want at once: it maps
+  every real number — including negatives — to something positive; it turns
+  score differences into weight ratios, which is the amplification; it is
+  smooth and differentiable everywhere, unlike a hard argmax; and it is the
+  maximum-entropy way to turn scores into probabilities — the least-committed
+  distribution consistent with the scores, assuming nothing beyond them.
+  Alternatives fail somewhere: squaring destroys the sign information and the
+  ordering of negative scores, plain division breaks on negatives outright,
+  and hardmax (all mass on the winner) has zero gradient almost everywhere, so
+  nothing upstream of it can learn.
+</div>
+
+Softmax shows up twice in every transformer forward pass: once inside every
+attention head of every layer, turning query–key scores into attention
+weights — the sharpening step of the attention pipeline — and once at the very
+end, turning the final logits into the next-token distribution that
+temperature, sampling, and cross-entropy all operate on.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Scores 5, 2, 1 — softmax vs plain division, every number shown">
+
+Take three scores: 5, 2, and 1. Exponentiate: $e^5 = 148.41$, $e^2 = 7.39$,
+$e^1 = 2.72$. Their sum is 158.52. Divide each by that sum and you have the
+distribution. Now run the same three scores through plain division — sum is 8,
+divide each score by 8 — and put the rows side by side:
+
+| step | A | B | C |
+| --- | --- | --- | --- |
+| score $s$ | 5.0 | 2.0 | 1.0 |
+| $e^s$ | 148.41 | 7.39 | 2.72 |
+| softmax $= e^s / 158.52$ | **0.936** | 0.047 | 0.017 |
+| plain division $= s / 8$ | 0.625 | 0.250 | 0.125 |
+
+Same input, radically different verdicts. Plain division says A is 2.5× more
+likely than B — exactly the ratio of the raw scores, 5 to 2. Softmax says A is
+**20× more likely** than B, because a score gap of 3 becomes a weight ratio of
+$e^3 \approx 20$. A's share of the total jumps from 62.5% to 93.6%. That
+amplification is not a side effect to be tolerated — it is the feature. When
+this is an attention row, it means the query reads almost entirely from the
+one token that actually matched.
+
+The implementation is four lines, and the real version always includes the
+max-subtraction trick from section 4:
+
+```python
+import numpy as np
+
+def softmax(s):
+    z = s - s.max()        # shift by the max — output provably identical
+    e = np.exp(z)          # largest exponent is now e^0 = 1: no overflow
+    return e / e.sum()
+
+s = np.array([5.0, 2.0, 1.0])
+np.exp(s)                  # [148.41, 7.39, 2.72] — sum 158.52
+softmax(s)                 # [0.936, 0.047, 0.017]
+s / s.sum()                # [0.625, 0.250, 0.125] — flatter, breaks on negatives
+softmax(s / 2.0)           # [0.736, 0.164, 0.100] — temperature T=2 flattens
+```
+
+That last line is worth a second look: dividing the scores by 2 pulled the
+winner from 93.6% down to 73.6%, and the result still sums to exactly 1 —
+scaling the inputs reshapes the distribution but can never break it.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Saturation, dead scores, and overflow">
+
+- **Saturation kills the gradient.** Push the score gaps wide enough and
+  softmax pins ~1.0 on one entry and ~0 on the rest — and a saturated softmax
+  has near-zero gradient, so whatever produced those scores stops learning.
+  This is precisely why attention divides by $\sqrt{d_k}$ *before* the softmax:
+  dot products of high-dimensional vectors naturally spread with dimension, and
+  without the rescale every attention head saturates into a frozen one-hot
+  lookup. The what-breaks section of the attention lesson is this exact
+  failure.
+- **Very negative scores contribute nothing.** A score far below the others
+  exponentiates to essentially zero and gets essentially zero weight. Models
+  exploit this deliberately: causal masking sets future positions to $-\infty$
+  before the softmax, so $e^{-\infty} = 0$ and future tokens receive exactly
+  zero attention. The mask has to land pre-softmax — zeroing weights afterward
+  would leave the remaining weights summing to less than 1.
+- **Naive exponentiation overflows.** float32 tops out around $3.4 \times
+  10^{38}$, which $e^{s}$ passes at $s \approx 89$; float64 dies at $s \approx
+  710$. Logits that size absolutely occur mid-training, and one overflow turns
+  the whole row into NaN. The fix rides on shift-invariance from section 2:
+  subtract the max score from every score first. The output is mathematically
+  identical, and the largest exponent becomes $e^0 = 1$, so nothing can
+  overflow. Every real implementation does this — the naive formula is only
+  ever written in textbooks.
+- **Exact 0 and exact 1 are unreachable.** With finite scores every output is
+  strictly inside (0, 1), so every option keeps *some* probability mass and the
+  model can never express total certainty. Mostly harmless, but it means
+  cross-entropy loss never reaches zero, and it is why sampling without
+  truncation can still emit garbage tokens — the tail never quite dies. The
+  top-k and top-p samplers exist to cut that tail off by hand.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why exponentiate at all? Argue against just dividing each score by the sum.">
+Three failures of plain division. First, negatives: attention scores and logits
+are routinely negative, and dividing by the sum then yields negative
+"probabilities" or a zero or negative denominator — not a distribution at all,
+while the exponential maps every real to a positive number. Second, no
+amplification: division preserves the ratios of the raw scores (5, 2, 1 stays
+2.5:1), while softmax turns score differences into ratios — a gap of 3 becomes
+a factor of e³ ≈ 20 — which is the winner-takes-most sharpness attention
+depends on. Third, softmax is the maximum-entropy answer: the least-committed
+distribution consistent with the scores, smooth and differentiable everywhere,
+which is what backpropagation needs.
+</Drill>
+
+<Drill q="Attention divides scores by √d, temperature divides logits by T. Does either break the sum-to-1 property?">
+No, and it can't — normalization is the last step, so whatever you do to the
+inputs, softmax renormalizes and the outputs sum to exactly 1. What input
+scaling changes is the shape: dividing by something bigger than 1 shrinks the
+score gaps and flattens the distribution toward uniform; scaling up sharpens
+it toward one-hot. √d in attention and temperature at the output layer are the
+same mathematical move with different goals — √d keeps training gradients
+alive, temperature is a user-facing sharpness dial at generation time.
+</Drill>
+
+<Drill q="Why does every real softmax implementation subtract the max score before exponentiating?">
+Numerical survival. e^s overflows float32 near s ≈ 89 and float64 near s ≈ 710,
+and one overflowed entry turns the row into NaN. Subtracting the max is free
+because softmax is shift-invariant: adding any constant c to all scores
+multiplies numerator and denominator by e^c, which cancels — the output is
+provably identical. After the shift the largest exponent is exactly e^0 = 1,
+so overflow is impossible, and very negative shifted scores merely underflow
+to 0, which is harmless.
+</Drill>
+
+<Drill q="Where does softmax appear in a transformer forward pass, and what pairs with it at each site?">
+Twice. Inside every attention head of every layer, it converts scaled
+query–key dot products into attention weights — paired with the √d scaling
+before it and the weighted sum of value vectors after it. And once at the
+output layer, converting final logits into the next-token distribution —
+paired with temperature and top-k/top-p at inference time, and with
+cross-entropy loss at training time, which is just the negative log of the
+softmax probability on the correct token.
+</Drill>
+
+<Drill q="What happens to learning when a softmax saturates, and name two places that matters in practice.">
+A saturated softmax — ~1.0 on one entry, ~0 elsewhere — has near-zero gradient
+with respect to its inputs, so everything upstream stops receiving a learning
+signal. First place it bites: attention without √d scaling. Dot products grow
+with dimension, the softmax saturates, and the head freezes into a hard lookup
+that can't learn where to look. Second place: distillation. A trained teacher's
+output softmax is usually very sharp, nearly one-hot, which carries little
+more information than the hard label — so distillation raises the temperature
+of both teacher and student softmaxes to un-saturate the distribution and
+expose the relative probabilities of the wrong answers, which is the signal
+the student actually learns from.
+</Drill>
+
+</Section>

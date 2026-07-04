@@ -215,7 +215,7 @@ export const TOPICS: Topic[] = [
     title: 'Softmax',
     hook: 'The function that turns any vector of scores into a probability distribution — and exaggerates the winner on the way.',
     category: 'math',
-    status: 'planned',
+    status: 'ready',
     viz: 'Draggable score bars + temperature',
   },
   {
