@@ -18,7 +18,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 0  | attention                | basics     | done   | (pre-existing)                            | —      |
 | 1  | context-window           | basics     | done   | [outline](outlines/context-window.md)     | 58577e1 |
 | 2  | embeddings               | basics     | done   | [outline](outlines/embeddings.md)         | 17d3317 |
-| 3  | positional-encoding      | basics     | done   | [outline](outlines/positional-encoding.md)| 0211e44 |
+| 3  | positional-encoding      | basics     | done   | [outline](outlines/positional-encoding.md)| fc25ffe |
 | 4  | softmax                  | math       | todo   | [outline](outlines/softmax.md)            |        |
 | 5  | cross-entropy            | math       | todo   | [outline](outlines/cross-entropy.md)      |        |
 | 6  | kl-divergence            | math       | todo   | [outline](outlines/kl-divergence.md)      |        |
