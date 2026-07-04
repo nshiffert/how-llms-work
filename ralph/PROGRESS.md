@@ -21,7 +21,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 3  | positional-encoding      | basics     | done   | [outline](outlines/positional-encoding.md)| fc25ffe |
 | 4  | softmax                  | math       | done   | [outline](outlines/softmax.md)            | 408cda6 |
 | 5  | cross-entropy            | math       | done   | [outline](outlines/cross-entropy.md)      | 643cb2f |
-| 6  | kl-divergence            | math       | todo   | [outline](outlines/kl-divergence.md)      |        |
+| 6  | kl-divergence            | math       | done   | [outline](outlines/kl-divergence.md)      | 978a553 |
 | 7  | vanishing-gradients      | math       | todo   | [outline](outlines/vanishing-gradients.md)|        |
 | 8  | beam-vs-greedy           | generation | todo   | [outline](outlines/beam-vs-greedy.md)     |        |
 | 9  | temperature              | generation | todo   | [outline](outlines/temperature.md)        |        |

@@ -1,0 +1,304 @@
+---
+title: KL Divergence
+category: math
+hook: A directed distance between two distributions — asymmetric on purpose, and lurking inside RLHF, distillation, and VI.
+crossLinks:
+  - cross-entropy
+  - distillation
+  - softmax
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import KLDivergenceExplorer from '../../components/islands/KLDivergenceExplorer.tsx';
+
+<Section n={1} title="What KL divergence is" tag="One number for how far distribution Q is from distribution P">
+
+An LLM's entire output is a probability distribution over the vocabulary (the
+softmax output — see the Softmax topic), so an enormous amount of practice
+reduces to one question: **how different are these two distributions?** Does
+the student model match the teacher it is distilling from? Has the RLHF-tuned
+policy drifted too far from the base model? Is the encoder's latent
+distribution close enough to the prior? (That last one is variational
+inference — the "VI" in every VAE paper.) Each of those needs a single scalar
+you can put in a loss function, and the scalar everyone reaches for is the
+Kullback–Leibler divergence.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> For distributions $P$
+  and $Q$ over the same outcomes,
+  $\;\mathrm{KL}(P \,\|\, Q) = \sum_i P(i)\,\ln\!\frac{P(i)}{Q(i)}$. It is the
+  expected number of <em>extra</em> nats (bits, with $\log_2$) needed to encode
+  samples drawn from $P$ using a code optimized for $Q$ — the price of
+  believing $Q$ when reality is $P$. It is always $\ge 0$, and it is $0$ only
+  when $P = Q$ exactly.
+</div>
+
+Read the formula as three moves per outcome: take the **ratio** $P(i)/Q(i)$
+(how much did $Q$ under- or over-rate this outcome), take its **log** (turn
+the ratio into additive nats — same move the Cross-entropy Loss topic makes),
+then **weight by $P(i)$** (count the mismatch only as often as $P$ actually
+produces that outcome). Where $Q$ under-rates an outcome the term is positive;
+where $Q$ over-rates it the term is negative; the sum is guaranteed to come
+out $\ge 0$.
+
+One thing it is *not*: a distance. $\mathrm{KL}(P \,\|\, Q) \ne
+\mathrm{KL}(Q \,\|\, P)$ in general — the two directions can disagree not just
+in size but in *which* candidate distribution they prefer. That asymmetry is
+not a defect to work around; it is the design space. Every system that uses
+KL chose a direction, and the choice encodes what the system cares about.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Weight the log-ratio by P — the weighting is why direction matters">
+
+The whole personality of KL lives in the weighting term. The log-ratio
+$\ln(P(i)/Q(i))$ is perfectly symmetric in spirit — it just measures
+disagreement on outcome $i$. But multiplying by $P(i)$ means **only the first
+argument's opinion of "where the action is" counts**. $\mathrm{KL}(P \,\|\,
+Q)$ inspects the mismatch at outcomes $P$ frequents, and is blind to
+outcomes where $P(i) \approx 0$ no matter how badly $Q$ misjudges them.
+Flip the direction and a different judge walks in: now $Q$ decides which
+mismatches get counted.
+
+Two consequences follow immediately, and both show up in production systems:
+
+- **Starving is fatal, in one direction.** If $Q(i) \to 0$ while $P(i) > 0$,
+  the term $P(i)\ln(P(i)/Q(i)) \to +\infty$: under $\mathrm{KL}(P \,\|\, Q)$,
+  $Q$ may never write off an outcome $P$ considers possible. But the reverse
+  direction shrugs — $\mathrm{KL}(Q \,\|\, P)$ weights that outcome by
+  $Q(i) \approx 0$, so the same starvation costs almost nothing.
+- **Each direction has a shape preference.** Minimizing
+  $\mathrm{KL}(P \,\|\, Q)$ over $Q$ produces **mode-covering** behavior: $Q$
+  must spread mass over everything $P$ does, even at the cost of hedging.
+  Minimizing $\mathrm{KL}(Q \,\|\, P)$ produces **mode-seeking**: $Q$ can
+  collapse onto one mode of $P$, as long as it avoids regions $P$ rates
+  improbable. Section 4 puts real numbers on this.
+
+Feel both consequences directly — the flip button is the entire lesson:
+
+<VizFrame
+  label="KL divergence between two draggable distributions"
+  caption="P (teal) and Q (blue) are both yours to reshape; the right panel computes the active direction term by term — weight × log-ratio — and sums it. Press ⇄ flip: same two distributions, different number. Then load 'Q starves bird' and watch one positive term dominate the sum, and 'two modes' + flip to see the two directions disagree about how bad a mode-collapsed Q is (1.593 vs 0.630)."
+>
+  <KLDivergenceExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">KL is the gap between cross-entropy and
+  entropy.</span> The identity from the Cross-entropy Loss topic:
+  $H(P, Q) = H(P) + \mathrm{KL}(P \,\|\, Q)$. Cross-entropy is the total bill
+  for encoding $P$ with $Q$'s code; entropy $H(P)$ is the irreducible part
+  you'd pay even with the perfect code; KL is exactly the <em>waste</em>.
+  Since $H(P)$ doesn't depend on $Q$, minimizing cross-entropy in $Q$ and
+  minimizing KL in $Q$ are the same optimization — which is why pretraining
+  "minimizes cross-entropy" and distillation "minimizes KL" and both are the
+  same move with a different target $P$: a one-hot label in pretraining
+  ($H(P)=0$, so loss <em>equals</em> KL), a soft teacher distribution in
+  distillation ($H(P)>0$, a constant the optimizer can't touch).
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Teacher vs student, both directions, every term shown">
+
+A distillation teacher predicts $P = [0.7, 0.2, 0.1]$ over \{cat, dog, bird\};
+the student currently predicts $Q = [0.5, 0.3, 0.2]$. First the direction
+distillation actually trains on, $\mathrm{KL}(P \,\|\, Q)$ — teacher weights,
+student is judged:
+
+| token | $P(i)$ | $Q(i)$ | $\ln\frac{P(i)}{Q(i)}$ | term $= P(i)\ln\frac{P(i)}{Q(i)}$ |
+| --- | --- | --- | --- | --- |
+| cat | 0.7 | 0.5 | $\ln 1.4 = +0.3365$ | **+0.2355** |
+| dog | 0.2 | 0.3 | $\ln 0.667 = -0.4055$ | −0.0811 |
+| bird | 0.1 | 0.2 | $\ln 0.5 = -0.6931$ | −0.0693 |
+| | | | | **$\mathrm{KL}(P \Vert Q) = 0.0851$ nats** |
+
+Now the same two distributions, flipped — $\mathrm{KL}(Q \,\|\, P)$:
+
+| token | $Q(i)$ | $P(i)$ | $\ln\frac{Q(i)}{P(i)}$ | term $= Q(i)\ln\frac{Q(i)}{P(i)}$ |
+| --- | --- | --- | --- | --- |
+| cat | 0.5 | 0.7 | $-0.3365$ | −0.1682 |
+| dog | 0.3 | 0.2 | $+0.4055$ | **+0.1216** |
+| bird | 0.2 | 0.1 | $+0.6931$ | **+0.1386** |
+| | | | | **$\mathrm{KL}(Q \Vert P) = 0.0920$ nats** |
+
+Same two distributions, different answers — 0.085 vs 0.092 — and, more
+telling, **different terms carry each sum**. The forward direction is driven
+by cat (the outcome $P$ frequents and $Q$ under-rates, +0.2355); the reverse is
+driven by dog and bird (the outcomes $Q$ over-rates relative to $P$). Each
+direction only sees the mismatches its own weighting distribution visits. Note
+also that individual terms go negative (dog and bird "help" in the forward
+direction) — only the total is guaranteed $\ge 0$.
+
+For scale: $e^{0.085} \approx 1.09$, so a sample from the teacher is on
+average about 9% more likely under the teacher's own distribution than under
+the student's — a mild mismatch, consistent with a student that is close but
+hedging too much.
+
+The computation is one line, and the cross-entropy identity is two more:
+
+```python
+import numpy as np
+
+P = np.array([0.7, 0.2, 0.1])          # teacher
+Q = np.array([0.5, 0.3, 0.2])          # student
+
+np.sum(P * np.log(P / Q))              # 0.0851  KL(P‖Q)
+np.sum(Q * np.log(Q / P))              # 0.0920  KL(Q‖P) — different number
+
+H_P  = -np.sum(P * np.log(P))          # 0.8018  entropy of the teacher
+H_PQ = -np.sum(P * np.log(Q))          # 0.8869  cross-entropy H(P, Q)
+H_PQ - H_P                             # 0.0851  = KL(P‖Q), the identity exactly
+```
+
+In PyTorch the same quantity hides behind a notoriously reversed API —
+`F.kl_div(input, target)` computes $\mathrm{KL}(\text{target} \,\|\,
+\text{input})$, with `input` already in log-space:
+
+```python
+import torch
+import torch.nn.functional as F
+
+p = torch.tensor([0.7, 0.2, 0.1])      # teacher (probabilities)
+q = torch.tensor([0.5, 0.3, 0.2])      # student
+
+F.kl_div(q.log(), p, reduction='sum')  # 0.0851 — this is KL(P‖Q), arguments reversed
+```
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Infinities from zeros, the wrong direction, and estimators that go negative">
+
+- **A zero in $Q$ is an infinite divergence.** $P(\text{bird}) = 0.1$ and the
+  bird term is $0.1\ln(0.1/Q(\text{bird}))$: at $Q(\text{bird}) = 0.01$ that's
+  0.230; at 0.001 it's 0.461; at $10^{-4}$, 0.691; at $10^{-8}$, 1.612 —
+  every ÷10 in $Q$ adds the same +0.23, without limit, and at exactly 0 the sum
+  is $+\infty$ (the same ÷10 ladder as the Cross-entropy Loss topic, scaled by
+  $P(i)$). This is why every practical KL sits on smoothed distributions: a
+  softmax with finite logits never emits an exact zero (the Softmax topic
+  covers why). Distillation's temperature $T > 1$ on both teacher and student
+  exists mainly to surface the teacher's preferences among *unlikely* tokens —
+  the dark knowledge the Distillation topic is about — but the softened tails
+  also keep the log-ratios on near-zero tokens from dominating the loss.
+  Code that zeroes entries by hand — token bans, truncated top-k renormalizing,
+  float underflow — rediscovers the infinity as a `nan` loss.
+- **Computing the wrong direction changes what "close" means.** Take a
+  bimodal $P = [0.495, 0.01, 0.495]$ and two candidate approximations: a
+  mode-collapsed $Q_a = [0.98, 0.01, 0.01]$ and a spread-out
+  $Q_b = [0.33, 0.34, 0.33]$. Forward KL says the spread one is far better:
+  $\mathrm{KL}(P\|Q_a) = 1.593$ vs $\mathrm{KL}(P\|Q_b) = 0.366$ —
+  mode-covering. Reverse KL says the *opposite*: $\mathrm{KL}(Q_a\|P) = 0.630$
+  vs $\mathrm{KL}(Q_b\|P) = 0.931$ — mode-seeking, because $Q_b$ keeps 0.34 of
+  its mass parked on an outcome $P$ rates at 0.01. The two directions
+  don't just disagree on magnitude; they **rank the candidates in opposite
+  order**. Pick the direction by asking whose samples you'll be living with:
+  distillation uses $\mathrm{KL}(\text{teacher}\,\|\,\text{student})$ so the
+  student can't starve anything the teacher produces; the RLHF penalty is
+  $\mathrm{KL}(\text{policy}\,\|\,\text{base})$, weighted by what the policy
+  actually generates, so it bites exactly where the fine-tune drifts into text
+  the base model finds implausible.
+- **KL is not a metric, and pipelines that assume it is misbehave.** Beyond
+  asymmetry, KL violates the triangle inequality, so "A is close to B and B is
+  close to C" implies nothing about A and C. Plugging KL into anything that
+  expects a true distance — clustering, nearest-neighbor lookups, symmetric
+  similarity matrices — silently produces order-dependent results. When you
+  genuinely need symmetry, that's what Jensen–Shannon divergence is for:
+  $\mathrm{JS}(P, Q)$ averages the two KLs against the mixture
+  $M = \tfrac{1}{2}(P+Q)$, is symmetric, and is bounded by $\ln 2$.
+- **Monte-Carlo KL estimates can come out negative.** In RLHF nobody sums over
+  a 50k-token vocabulary across all positions of all responses; the KL penalty
+  is estimated from the tokens actually sampled. The naive per-token estimator
+  $\ln\frac{\pi(x)}{\rho(x)}$ is unbiased but high-variance — and on any
+  individual token where the base model $\rho$ likes the sample *more* than
+  the policy $\pi$ does, it is negative, even though true KL never is. Logs
+  showing "negative KL" are usually this estimator, not a bug in information
+  theory — and PPO implementations often swap in the estimator
+  $(r - 1) - \ln r$ with $r = \rho(x)/\pi(x)$, which is non-negative
+  per-sample, lower-variance, and still unbiased.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why is KL divergence asymmetric? Answer from the formula, not by assertion.">
+The log-ratio ln(P(i)/Q(i)) treats the two distributions symmetrically (up to
+sign) — the asymmetry comes entirely from the weighting: KL(P‖Q) averages the
+log-ratio under P, so only mismatches at outcomes P actually visits get
+counted. Swap the direction and Q becomes the judge of where the action is —
+a different average over the same log-ratios. Concretely, for P=[0.7,0.2,0.1]
+vs Q=[0.5,0.3,0.2]: forward KL is 0.085 and driven by the cat term; reverse
+is 0.092 and driven by dog and bird. Consequence: forward KL (minimized over
+Q) is mode-covering — Q must put mass everywhere P does or eat an unbounded
+penalty; reverse KL is mode-seeking — Q can collapse onto one mode of P as
+long as it stays out of P's low-probability regions.
+</Drill>
+
+<Drill q="State the exact relationship between cross-entropy and KL, and explain why distillation papers treat the two losses as interchangeable.">
+H(P, Q) = H(P) + KL(P‖Q): cross-entropy is the entropy of the target plus the
+KL waste. Since H(P) doesn't involve Q, the two losses differ by a constant
+with respect to the model being trained, so they have identical gradients and
+identical minimizers — minimizing cross-entropy with a fixed target IS
+minimizing KL to it. In pretraining P is one-hot, H(P)=0, and the training
+loss literally equals KL(P‖Q). In distillation P is the teacher's soft
+distribution, H(P)>0, so the reported loss values differ but the optimization
+doesn't. Numbers from the worked example: H(P)=0.802, H(P,Q)=0.887,
+difference 0.085 = KL(P‖Q) exactly.
+</Drill>
+
+<Drill q="Name three places KL divergence appears in the modern LLM stack, and give the direction each one uses.">
+(1) Distillation: KL(teacher‖student) — the teacher weights the average, so
+the student pays unboundedly for assigning ~0 to any token the teacher rates
+probable; that's the mode-covering direction, chosen because the student must
+reproduce the teacher's full distribution. (2) RLHF/PPO drift penalty (and
+implicitly the reference term in DPO): KL(policy‖base) — weighted by the
+policy's own samples, so the penalty bites precisely where the fine-tuned
+model generates text the base model finds implausible; reward hacking usually
+lives there. (3) VAEs: KL(q(z|x)‖p(z)) regularizes the encoder's posterior
+toward the prior so the latent space stays decodable. Bonus: pretraining
+itself — cross-entropy against one-hot labels is KL to the empirical
+next-token distribution.
+</Drill>
+
+<Drill q="Why does a single zero in Q blow up KL(P‖Q), and what do real systems do about it?">
+The term is P(i)·ln(P(i)/Q(i)); with P(i)>0 fixed, every ÷10 in Q(i) adds
+P(i)·ln10 ≈ 2.3·P(i) nats — 0.23 per decade for P(i)=0.1 — with no floor, and
+at Q(i)=0 the term is +∞. Information-theoretically that's the correct
+verdict: a code built on "this outcome is impossible" needs infinite bits when
+it happens. Systems avoid the infinity structurally: softmax with finite
+logits can't emit exact zeros (Softmax topic), distillation applies a
+temperature T>1 to both teacher and student to fatten tails before the KL,
+and classical n-gram land used explicit smoothing. The failure returns
+whenever code manufactures hard zeros downstream — token bans that zero
+probabilities, top-k truncation, underflow — and it surfaces as inf/nan loss,
+same mechanism as the −log(0) failure in the Cross-entropy Loss topic.
+</Drill>
+
+<Drill q="Your RLHF dashboard shows the per-batch KL penalty dipping negative. Broken run?">
+Not necessarily — true KL can't be negative, but nobody computes true KL
+there. The penalty is a Monte-Carlo estimate over sampled tokens, and the
+naive per-token estimator ln(π(x)/ρ(x)) is unbiased only in expectation: any
+token the base model likes better than the policy contributes a negative
+value, so small-sample averages can dip below zero. Persistent large negative
+values do mean something is off (mismatched tokenization between policy and
+reference, wrong log-prob alignment, or the policy collapsing toward regions
+the reference prefers). The standard fix is the estimator (r−1)−ln(r) with
+r = ρ(x)/π(x): per-sample non-negative, lower variance, still unbiased.
+</Drill>
+
+<Drill q="You need a symmetric similarity between token distributions for clustering. Is KL acceptable? What's the principled alternative?">
+KL fails twice: it's asymmetric (KL(P‖Q)≠KL(Q‖P) — 0.085 vs 0.092 even for
+mildly different distributions, and the two directions can rank candidates in
+opposite order), and it violates the triangle inequality, so distance-based
+algorithm guarantees evaporate. Hacks like averaging the two directions fix
+symmetry but not the unbounded blow-up on near-zeros. The principled choice is
+Jensen–Shannon divergence: JS(P,Q) = ½KL(P‖M) + ½KL(Q‖M) with M = ½(P+Q). It's
+symmetric, bounded by ln 2 (both KLs compare against the mixture, which is
+zero-free wherever either input has mass), and its square root is a true
+metric. If you need actual geometry, Wasserstein distance is the other
+standard answer — it also handles distributions with disjoint support, where
+KL is infinite and JS saturates.
+</Drill>
+
+</Section>

@@ -231,7 +231,7 @@ export const TOPICS: Topic[] = [
     title: 'KL Divergence',
     hook: 'A directed distance between two distributions — asymmetric on purpose, and lurking inside RLHF, distillation, and VI.',
     category: 'math',
-    status: 'planned',
+    status: 'ready',
     viz: 'Reshape P, Q — watch the asymmetry',
   },
   {
