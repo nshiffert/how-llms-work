@@ -129,7 +129,7 @@ export const TOPICS: Topic[] = [
     title: 'Distillation',
     hook: 'The teacher’s soft distribution carries more signal than the hard label — the student learns the dog-vs-cat uncertainty, not just the answer.',
     category: 'finetune',
-    status: 'planned',
+    status: 'ready',
     viz: 'Teacher→student KL shrinking',
   },
   {

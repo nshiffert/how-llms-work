@@ -1,0 +1,309 @@
+---
+title: Distillation
+category: finetune
+hook: The teacher’s soft distribution carries more signal than the hard label — the student learns the dog-vs-cat uncertainty, not just the answer.
+crossLinks:
+  - kl-divergence
+  - cross-entropy
+  - qlora
+  - softmax
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import DistillationLab from '../../components/islands/DistillationLab.tsx';
+
+<Section n={1} title="What distillation is" tag="Train a small student to match a big teacher's output distribution">
+
+You want a frontier model's quality at a small model's cost. Serving a big
+model is expensive in exactly the ways that hurt at scale — latency,
+GPU-hours, dollars per million tokens — and most production traffic doesn't
+need the full model to get the right answer. Every major lab ships the same
+solution: a compact variant (the "mini" / "haiku" / "flash" / "lite" tier)
+that is not trained like its big sibling. It is **distilled** from it.
+
+The trick is *what the small model trains against*. Ordinary supervised
+training uses **hard labels**: for each input, one correct answer, probability
+1, everything else 0. Distillation replaces that with the teacher's **soft
+labels** — its full output probability distribution. Concretely: a hard label
+says `cat`. A teacher says **cat 0.7, dog 0.2, bird 0.1** — "probably a cat,
+plausibly a small dog, almost certainly not a bird." That second version
+contains strictly more information, and it is per-example: a lanky, whippet-ish
+cat gets `cat 0.55, dog 0.42, bird 0.03`, while an unmistakable tabby gets
+`cat 0.97, dog 0.02, bird 0.01`. The
+hard label is identical in both cases; the teacher's distribution is not.
+Hinton called this extra structure **dark knowledge** — the teacher's learned
+sense of *how* the classes relate, encoded in the probabilities it gives the
+wrong answers.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Knowledge distillation
+  trains a small <strong>student</strong> model to match a large
+  <strong>teacher</strong> model's output distribution. The teacher runs a
+  forward pass over the training data and emits its full softmax distribution
+  per example (per token, for an LLM); the student is optimized to minimize the
+  divergence — usually <strong>KL(teacher&nbsp;‖&nbsp;student)</strong>, or
+  equivalently a cross-entropy against the soft targets — rather than the loss
+  against hard ground-truth labels.
+</div>
+
+For an LLM the "classes" are the whole vocabulary: at every position the
+teacher produces a distribution over ~100k+ tokens, and the student is trained
+to reproduce that distribution at that position. One training example
+therefore carries a vocabulary-sized target instead of a single index — that
+density of signal is why a student can reach most of the teacher's quality
+with a fraction of the parameters.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Teacher emits soft targets → student descends KL(teacher‖student)">
+
+The pipeline has two halves. The **teacher half** is pure inference: run the
+frozen teacher over a corpus and record, for each position, its output
+distribution (the softmax over the vocabulary — see the Softmax topic). The
+**student half** is ordinary gradient training, except the loss compares the
+student's distribution to the teacher's instead of to a one-hot label:
+
+$$
+\mathcal{L}_{\text{distill}} \;=\; \mathrm{KL}(P_{\text{teacher}} \,\|\, Q_{\text{student}}) \;=\; \sum_i P(i)\,\ln\frac{P(i)}{Q(i)}
+$$
+
+The direction is a choice, and it matters (the KL Divergence topic is entirely
+about this asymmetry). $\mathrm{KL}(P \,\|\, Q)$ weights every mismatch by
+where the **teacher** puts its mass — the student is punished hardest for
+starving tokens the teacher rates probable, and pays nothing for hedging on
+tokens the teacher has already ruled out. That makes forward KL
+**mode-covering**: the student is forced to spread its mass over everything
+the teacher considers plausible.
+
+The gradient is almost embarrassingly clean. With student logits $z$ and
+$q = \mathrm{softmax}(z)$, the per-position gradient is
+
+$$
+\frac{\partial \mathcal{L}}{\partial z_i} = q_i - p_i
+$$
+
+— student's probability minus teacher's probability, per vocabulary entry.
+This is *exactly* the softmax + cross-entropy gradient from the Cross-entropy
+Loss topic with the one-hot label replaced by the teacher's distribution.
+Distillation is not a new training algorithm; it is cross-entropy with a
+smarter, per-example target.
+
+One more dial: **temperature**. At $T=1$ a confident teacher's distribution is
+nearly one-hot — cat 0.7, dog 0.2, bird 0.1 still has structure, but a teacher
+that says cat 0.99 has almost nothing left in the tail. So both softmaxes are
+run at $T > 1$ during distillation ($\mathrm{softmax}(z/T)$, typically
+$T\!\in\![2,4]$), which flattens the distributions and amplifies the relative
+information in the small probabilities. Because soft-target gradients shrink
+like $1/T^2$, the soft loss is multiplied by $T^2$ to keep its gradient scale
+comparable to the hard loss. Hinton's original recipe blends both signals:
+
+$$
+\mathcal{L} = (1-\alpha)\,\mathrm{CE}(y_{\text{hard}}, Q_{T=1}) \;+\; \alpha\, T^2\, \mathrm{KL}(P_T \,\|\, Q_T)
+$$
+
+The finished student is served at $T=1$ — temperature is a training-time
+trick, not an inference setting.
+
+<VizFrame
+  label="Distillation lab · student descends KL(teacher‖student)"
+  caption="Press ▶ train. The teacher's target (cat 0.7 / dog 0.2 / bird 0.1) is fixed; each step is one real gradient update on the student's logits (z ← z − (q − p)), and the KL breakdown plus training curve show the divergence collapsing. Then raise the temperature — the target flattens and the dog/bird structure gets amplified. Finally flip the target to the hard label: the dog and bird terms vanish from the loss, and with them everything the teacher knew about the wrong answers."
+>
+  <DistillationLab client:visible />
+</VizFrame>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Cat 0.7 / dog 0.2 / bird 0.1, traced to convergence">
+
+Take the teacher distribution **cat 0.7, dog 0.2, bird 0.1** and a student
+that starts badly wrong: **cat 0.2, dog 0.3, bird 0.5**. The starting
+divergence, term by term:
+
+| token | term $\;p \cdot \ln(p/q)$ | value (nats) |
+| --- | --- | --- |
+| cat | $0.7 \cdot \ln(0.7/0.2)$ | **+0.877** |
+| dog | $0.2 \cdot \ln(0.2/0.3)$ | −0.081 |
+| bird | $0.1 \cdot \ln(0.1/0.5)$ | −0.161 |
+| **total** | $\mathrm{KL}(P\,\|\,Q)$ | **0.635** |
+
+The starved cat term dominates — forward KL bills you where the *teacher's*
+mass is. Now train: one gradient step per row, $z \leftarrow z - (q - p)$ with
+learning rate 1 on the student's three logits:
+
+| step | student (cat, dog, bird) | KL(teacher‖student) |
+| --- | --- | --- |
+| 0 | 0.200 · 0.300 · 0.500 | 0.6349 |
+| 1 | 0.352 · 0.290 · 0.358 | 0.2791 |
+| 2 | 0.479 · 0.255 · 0.266 | 0.1188 |
+| 3 | 0.562 · 0.227 · 0.212 | 0.0541 |
+| 10 | 0.690 · 0.190 · 0.120 | 0.0022 |
+
+Ten steps and the student is at 0.69 / 0.19 / 0.12 — carrying the teacher's
+2:1 dog-over-bird judgment, which a hard label could never have taught it. The
+whole trace is ~20 lines:
+
+```python
+import math
+
+def softmax(logits, T=1.0):
+    e = [math.exp(z / T) for z in logits]
+    return [x / sum(e) for x in e]
+
+def kl(p, q):
+    return sum(pi * math.log(pi / qi) for pi, qi in zip(p, q))
+
+p = [0.7, 0.2, 0.1]                          # teacher: cat, dog, bird
+z = [math.log(x) for x in [0.2, 0.3, 0.5]]   # student starts far off
+
+for step in range(11):
+    q = softmax(z)
+    print(step, [round(x, 3) for x in q], round(kl(p, q), 4))
+    z = [zi - (qi - pi) for zi, qi, pi in zip(z, q, p)]   # dKL/dz = q − p
+```
+
+Temperature reshapes the target before any of this runs. Softening the same
+teacher (dividing its logits by $T$ before the softmax):
+
+| $T$ | teacher target (cat, dog, bird) |
+| --- | --- |
+| 0.5 | 0.907 · 0.074 · 0.019 |
+| 1 | 0.700 · 0.200 · 0.100 |
+| 2 | 0.523 · 0.279 · 0.198 |
+| 5 | 0.407 · 0.317 · 0.276 |
+
+At $T=2$ the dog/bird tail holds ~48% of the mass instead of 30% — the dark
+knowledge is amplified. At $T=0.5$ the target is 0.907/0.074/0.019, most of
+the way back to a hard label.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">What this buys in production.</span>
+  DistilBERT is the canonical public number: <strong>40% fewer parameters</strong>
+  (66M vs 110M), <strong>~97% of BERT's GLUE score, 60% faster</strong> — from
+  exactly this soft-target recipe. The pattern generalizes: distilled students
+  routinely keep ~90%+ of teacher quality at roughly 10× the serving speed,
+  which is the entire economic basis of the mini/haiku/flash model tiers.
+  (QLoRA is the other path to a cheap deployable model — it makes
+  <em>fine-tuning</em> a big model cheap; distillation makes <em>serving</em> a
+  small one good.) For
+  modern LLMs there is a second flavor: when you can't get the teacher's
+  logits (an API-only teacher, or a mismatched tokenizer), you train the
+  student on the teacher's <em>generated text</em> instead — sequence-level
+  distillation. DeepSeek's R1 distills were made this way: ~800k R1-generated
+  reasoning samples used to fine-tune much smaller Qwen and Llama students.
+</div>
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Capacity caps, inherited blind spots, and the temperature dial">
+
+- **Student capacity is a hard ceiling.** A 1B student cannot represent a 70B
+  teacher's function; forward KL then forces a compromise — mode-covering
+  means the student overweights low-probability regions it can't actually
+  model, and sampling from those inflated tails surfaces as degraded,
+  sometimes hallucinated continuations. (Some LLM distillation methods flip to
+  reverse KL for exactly this reason — mode-seeking lets a small student
+  commit to the modes it can actually fit.)
+- **Bigger teacher ≠ better student.** Past a certain capability gap, student
+  quality *drops* as the teacher grows — the teacher's distributions become
+  too sharp and too alien for the student to track. The published fix is a
+  **teacher assistant**: distill 70B → 13B → 3B instead of 70B → 3B directly.
+- **The student inherits the teacher's blind spots.** Distillation only ever
+  runs on the data you feed it, against targets the teacher produced. Where
+  the teacher is wrong, the student is trained to be *confidently* wrong the
+  same way; where the corpus never goes (the long tail), the student learned
+  nothing and the teacher's quality there never transferred. Symptom: a
+  distilled model that matches the teacher on benchmarks and falls apart on
+  out-of-distribution traffic.
+- **Temperature set wrong kills the signal.** Too low and the soft targets
+  collapse toward one-hot (at $T=0.5$ the worked example's target is
+  0.907/0.074/0.019 — the dark knowledge is nearly gone, you're back to hard
+  labels). Too high and the target approaches uniform (0.407/0.317/0.276 at
+  $T=5$), drowning what the teacher actually believes in noise.
+- **Logit distillation needs a shared vocabulary.** KL between distributions
+  only makes sense over the same support — teacher and student must share a
+  tokenizer, which is why distilled families are trained in-house. Across
+  tokenizers, or through an API that exposes only samples or top-k logprobs,
+  you're limited to sequence-level distillation on generated text — a weaker,
+  noisier signal (and most frontier labs' terms of service prohibit using
+  their outputs to train competitors, which is a real constraint, not a
+  technicality).
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why do soft labels beat hard labels as a training signal?">
+A hard label is one bit of structure per example: the right class, probability
+1. The teacher's soft distribution additionally encodes how *every wrong
+answer* relates to the input — cat 0.7 / dog 0.2 / bird 0.1 teaches the
+student that this cat is dog-adjacent and nothing like a bird, and the numbers
+change per example — cat 0.55, dog 0.42, bird 0.03 versus cat 0.97, dog 0.02,
+bird 0.01. That similarity structure ("dark knowledge") is exactly
+what the teacher spent its capacity learning, and it regularizes the student
+toward the teacher's function rather than just its argmax. Per token of an
+LLM, the target is a full vocabulary-sized distribution instead of a single
+index — far more gradient signal per example.
+</Drill>
+
+<Drill q="What loss compares student to teacher, and why does its direction matter?">
+KL(teacher‖student) — forward KL, teacher weights the average (see KL
+Divergence). It punishes the student for assigning low probability where the
+teacher assigns high probability, so it is mode-covering: the student must
+spread mass over everything the teacher rates plausible. Reverse KL,
+KL(student‖teacher), is mode-seeking — the student can drop teacher modes and
+commit to the ones it can fit, which some LLM distillation work prefers for
+small students on open-ended generation. Both reduce to cross-entropy
+machinery: the forward-KL gradient with respect to the student logits is q − p,
+the standard softmax cross-entropy gradient with the one-hot replaced by the
+teacher's distribution.
+</Drill>
+
+<Drill q="Where does temperature enter distillation, and why is the soft loss multiplied by T²?">
+Both teacher and student softmaxes run at T &gt; 1 during training
+(softmax(z/T), typically T between 2 and 4), which flattens the distributions
+and amplifies the informative tail — a 0.7/0.2/0.1 teacher becomes
+0.523/0.279/0.198 at T=2. The gradients of the soft-target loss scale like
+1/T², so the soft term is multiplied by T² to keep it balanced against the
+hard-label term in the combined loss. Temperature is training-only: the
+finished student serves at T=1 — don't confuse it with sampling temperature at
+inference, which is a decoding knob (the Temperature topic).
+</Drill>
+
+<Drill q="Is distillation how the 'mini' / 'haiku' / 'flash' models are made?">
+Yes — that tier is the industrial product of distillation: a small student
+trained to match a frontier teacher, keeping most of the quality (DistilBERT's
+public numbers: 40% fewer parameters, ~97% of the score, 60% faster) at a
+serving cost that makes high-volume traffic economical. Two flavors: logit
+distillation (match full distributions — needs a shared tokenizer, so it
+happens in-house) and sequence-level distillation (fine-tune on
+teacher-generated text — what DeepSeek did to make its R1 distills from ~800k
+R1 samples, and the only option through an API). QLoRA solves a different
+problem: it makes *fine-tuning* a big model cheap; distillation makes
+*serving* a small one good.
+</Drill>
+
+<Drill q="What caps the student's quality, and does a bigger teacher always help?">
+Capacity, coverage, and the gap. Capacity: the student can't represent
+everything the teacher knows, and forward KL makes it smear rather than drop
+what doesn't fit. Coverage: quality only transfers where the distillation
+corpus goes — off-distribution, the student inherits nothing except the
+teacher's mistakes, which it learned as ground truth. And no — past a certain
+capability gap a bigger teacher produces a *worse* student, because its sharp
+distributions are too hard to track; the fix is a mid-size teacher assistant
+distilled in stages.
+</Drill>
+
+<Drill q="You can only access the teacher via an API returning sampled text. Can you still distill from it?">
+Yes, but you drop from logit distillation to sequence-level distillation:
+generate a corpus with the teacher and fine-tune the student on it with plain
+cross-entropy against the sampled tokens. You lose the per-token distribution
+— each position teaches one sampled token, not the full soft target — so the
+signal is noisier and you compensate with volume. Watch two constraints:
+tokenizer mismatch doesn't matter here (it's just text), but the provider's
+terms of service almost certainly prohibit training a competing model on their
+outputs.
+</Drill>
+
+</Section>
