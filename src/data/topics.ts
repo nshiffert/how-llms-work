@@ -163,7 +163,7 @@ export const TOPICS: Topic[] = [
     title: 'Top-k vs Top-p',
     hook: 'Top-k keeps a fixed count; top-p keeps a fixed probability mass — one is rigid, one adapts to how confident the model is.',
     category: 'generation',
-    status: 'planned',
+    status: 'ready',
     viz: 'Truncation on the probability bars',
   },
   {

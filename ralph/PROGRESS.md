@@ -25,7 +25,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 7  | vanishing-gradients      | math       | done   | [outline](outlines/vanishing-gradients.md)| ffaedc9 |
 | 8  | beam-vs-greedy           | generation | done   | [outline](outlines/beam-vs-greedy.md)     | 1fc1be2 |
 | 9  | temperature              | generation | done   | [outline](outlines/temperature.md)        | 65df4e3 |
-| 10 | top-k-top-p              | generation | todo   | [outline](outlines/top-k-top-p.md)        |        |
+| 10 | top-k-top-p              | generation | done   | [outline](outlines/top-k-top-p.md)        |        |
 | 11 | autoregressive-vs-masked | generation | todo   | [outline](outlines/autoregressive-vs-masked.md) |  |
 | 12 | lora                     | finetune   | todo   | [outline](outlines/lora.md)               |        |
 | 13 | qlora                    | finetune   | todo   | [outline](outlines/qlora.md)              |        |
