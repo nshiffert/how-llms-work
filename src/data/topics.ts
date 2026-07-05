@@ -181,7 +181,7 @@ export const TOPICS: Topic[] = [
     title: 'RAG',
     hook: 'Don’t bake the knowledge into weights — retrieve it at query time and paste it into the prompt. The failure mode is the lesson.',
     category: 'advanced',
-    status: 'planned',
+    status: 'ready',
     viz: 'Retrieve→inject→generate pipeline',
   },
   {

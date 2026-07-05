@@ -1,0 +1,316 @@
+---
+title: RAG
+category: advanced
+hook: Don't bake the knowledge into weights — retrieve it at query time and paste it into the prompt. The failure mode is the lesson.
+crossLinks:
+  - embeddings
+  - context-window
+  - autoregressive-vs-masked
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import RagPipelineExplorer from '../../components/islands/RagPipelineExplorer.tsx';
+
+<Section n={1} title="What RAG is" tag="Move the facts out of the weights and into the prompt">
+
+A model's weights are a terrible database. Facts learned in pretraining are
+**lossy** — compressed into parameters by a next-token objective that never
+promised verbatim recall. They are **stale** — frozen at the training cutoff.
+And they are **un-updatable** — correcting one fact means fine-tuning, and
+fine-tuning nudges millions of shared weights with no guarantee the fact lands
+intact or stays put. Ask a model for your platform's current seller fee and it
+will answer fluently from whatever distribution of fee-like text it digested
+two years ago.
+
+Retrieval-augmented generation sidesteps the problem instead of solving it:
+stop asking the weights to store the facts. Keep the facts in ordinary
+documents, find the relevant ones *at query time*, and paste them into the
+prompt. The model answers by **reading text in its context window**, which is
+the one thing an LLM does reliably.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> RAG retrieves the
+  documents most relevant to a query — typically by embedding similarity — and
+  injects them verbatim into the prompt, so the model generates an answer
+  conditioned on retrieved text rather than on memorized weights. The model is
+  unchanged; only its <em>input</em> changes.
+</div>
+
+Draw the boundary precisely, because it is the single most common confusion:
+**RAG changes the facts available in context; it does not change the model's
+behavior.** Fine-tuning is the opposite tool — it shifts behavior (tone,
+format, reasoning style) but is a lossy, expensive way to install facts. "Our
+model doesn't know our products" is a RAG problem. "Our model won't stop
+writing marketing fluff in support tickets" is a fine-tuning problem. Teams
+burn quarters fine-tuning facts in, watching them come back paraphrased and
+wrong, when the fix was to put the facts in the prompt.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Chunk → embed → index, then embed the query and pull the nearest neighbors">
+
+The pipeline has two halves. The **ingest half** runs ahead of time: split your
+documents into **chunks** (typically 256–1,024 tokens each, often with 10–20%
+overlap so a fact straddling a boundary survives in at least one piece), run
+each chunk through an **embedding model** to get one vector per chunk, and
+store the vectors in a **vector database** alongside the original text. These
+are *sentence* embeddings — a full forward pass through an encoder that pools
+the whole passage into one vector, not a lookup into a token table; the
+embeddings topic draws that distinction sharply. A production embedder like
+OpenAI's `text-embedding-3-small` maps any passage to a 1,536-dimensional
+vector for $0.02 per million tokens.
+
+The **query half** runs per request:
+
+1. Embed the user's question **with the same embedding model** that indexed
+   the corpus. Two different embedders put vectors in two unrelated spaces —
+   similarity across them is meaningless.
+2. Find the chunks whose vectors are nearest to the query vector, almost
+   always by **cosine similarity** — the angle between vectors, because in
+   embedding spaces direction carries the meaning.
+3. Take the **top-k** (k of 3–10 is typical), paste their text into the
+   prompt with the question, and generate.
+
+Serious systems hybridize step 2: pure vector search can miss exact strings —
+part numbers, error codes, names — so a keyword scorer (**BM25**) runs in
+parallel and the two rankings merge. Semantic match catches paraphrase;
+lexical match catches identifiers.
+
+Step through the whole thing below. The corpus is five help-center chunks
+embedded in a 5-dimensional toy space whose axes are human-readable; every
+cosine score is computed live from the vectors on screen.
+
+<VizFrame
+  label="RAG pipeline · query → embed → cosine search → top-k → prompt → generate"
+  caption="Pick a query and press Step (or Run all). Notice the first preset never says the word 'fee' yet retrieves the fee chunk at cosine 0.978 — matching on meaning is the entire point of embeddings. Then run Retrieval failure: the corpus has no returns policy, the best score collapses to 0.353, and top-k stuffs the two nearest junk chunks into the prompt anyway — watch the model answer confidently from nothing."
+>
+  <RagPipelineExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Retrieval never says no.</span> Top-k is
+  an <em>argmax</em>, not a threshold — it returns the k nearest chunks whether
+  the nearest is cosine 0.98 or 0.35. There is no built-in "nothing matched"
+  signal. Every downstream hallucination in the failure preset starts here, and
+  every serious mitigation (score cutoffs, rerankers, "I don't know" prompting)
+  is a patch on exactly this property.
+</div>
+
+Retrieved chunks are paid for in context budget: five 512-token chunks cost
+2,560 tokens of context window before the user's question or the answer — the
+context-window topic prices out why you can't just "retrieve more to be safe."
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Real cosines over a 5-chunk corpus, end to end">
+
+The explorer's corpus, with its actual vectors. Axes:
+`[fees, shipping, authenticity, account, returns]`.
+
+| chunk | text (abridged) | vector |
+| --- | --- | --- |
+| c1 · Seller fees | "Final value fee is 12.9% + $0.30/order…" | `[0.91, 0.07, 0.02, 0.28, 0.05]` |
+| c2 · Shipping | "Tracking can take 24–48h to update…" | `[0.08, 0.94, 0.05, 0.12, 0.10]` |
+| c3 · Authentication | "Watches/handbags over $500 route through…" | `[0.04, 0.18, 0.95, 0.06, 0.08]` |
+| c4 · Account security | "Two-factor auth is required for payouts…" | `[0.06, 0.04, 0.22, 0.93, 0.03]` |
+| c5 · Payouts | "Payouts land 2 business days after delivery…" | `[0.74, 0.12, 0.03, 0.55, 0.04]` |
+
+Query: **"What cut does the platform take when I sell something?"** — which
+embeds to `q = [0.79, 0.18, 0.05, 0.12, 0.06]`. Note there is zero keyword
+overlap with chunk c1: no "fee", no "final value". The match has to come from
+geometry.
+
+Cosine against c1, by hand — dot product over the product of norms:
+
+```text
+q · c1  = 0.79·0.91 + 0.18·0.07 + 0.05·0.02 + 0.12·0.28 + 0.06·0.05
+        = 0.7189 + 0.0126 + 0.0010 + 0.0336 + 0.0030  =  0.7691
+‖q‖ = 0.8228     ‖c1‖ = 0.9562
+cos(q, c1) = 0.7691 / (0.8228 × 0.9562) = 0.978
+```
+
+The same computation against all five chunks:
+
+| chunk | cosine | verdict |
+| --- | --- | --- |
+| c1 · Seller fees | **0.978** | top-1 — pure semantic match |
+| c5 · Payouts | **0.882** | top-2 — fees appear in payout math |
+| c2 · Shipping | 0.324 | cliff |
+| c4 · Account security | 0.227 | noise |
+| c3 · Authentication | 0.154 | noise |
+
+Top-2 selection takes c1 and c5 — k=2 keeps a five-chunk example legible;
+production k is the 3–10 from the mechanic above — and the assembled prompt is
+just concatenation:
+
+```text
+System: Answer using ONLY the context below.
+
+[1] (Seller fees, cos 0.978) Final value fee is 12.9% of the total sale
+    price plus $0.30 per order. Premium-plan sellers pay 11.5%.
+[2] (Payouts, cos 0.882) Payouts land 2 business days after delivery
+    confirmation, minus the final value fee and shipping label costs.
+
+User: What cut does the platform take when I sell something?
+```
+
+The generation step is ordinary next-token prediction over that prompt — the
+"12.9%" in the answer is read out of context, not recalled from weights. The
+whole retrieval side fits in a dozen lines of NumPy:
+
+```python
+import numpy as np
+
+chunks = np.array([[0.91, 0.07, 0.02, 0.28, 0.05],   # c1 fees
+                   [0.08, 0.94, 0.05, 0.12, 0.10],   # c2 shipping
+                   [0.04, 0.18, 0.95, 0.06, 0.08],   # c3 authentication
+                   [0.06, 0.04, 0.22, 0.93, 0.03],   # c4 account
+                   [0.74, 0.12, 0.03, 0.55, 0.04]])  # c5 payouts
+
+q = np.array([0.79, 0.18, 0.05, 0.12, 0.06])         # embedded query
+
+sims = (chunks @ q) / (np.linalg.norm(chunks, axis=1) * np.linalg.norm(q))
+# array([0.978, 0.324, 0.154, 0.227, 0.882])
+
+topk = np.argsort(-sims)[:2]                          # -> [0, 4]  (c1, c5)
+```
+
+In production the vectors are 1,536-dimensional and opaque — no axis means
+"fees"; meaning is smeared across all dimensions, as the embeddings topic
+shows with real word2vec vectors — and the brute-force `chunks @ q` becomes an
+approximate nearest-neighbor index (HNSW is the standard) so that searching
+10M chunks takes single-digit milliseconds instead of a full scan. The math is
+otherwise identical. One calibration warning: the *absolute* cosine values here
+are artifacts of the toy space. Real embedders compress scores into a narrow,
+model-specific band — under `text-embedding-3-small` a great match can score
+around 0.5 — so absolute similarities are not comparable across models. Only
+the ranking and the *gap* between hit and junk generalize, which is why any
+similarity threshold has to be calibrated per embedder, on your own queries.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Retrieval fails silently, and the model papers over it fluently">
+
+- **Retrieval failure → confident hallucination.** Run the failure preset
+  above: *"Can I return an item if I just don't like it?"* embeds to
+  `[0.12, 0.22, 0.03, 0.08, 0.90]` — its mass sits in the returns dimension,
+  which no chunk covers. Best score: c2 at **0.353**, followed by c5 at 0.224.
+  All junk. But top-k returns two chunks regardless, the prompt gets stuffed
+  with shipping and payout text, and the model — asked a returns question with
+  no returns text in sight — invents a 30-day policy. The symptom in
+  production: confident, specific, wrong answers that even "cite" the
+  irrelevant retrieved documents. This is the #1 RAG failure mode, and it is
+  silent because the pipeline *succeeded* mechanically at every stage.
+- **Chunk size is a two-sided trap.** Too small (a sentence or two) and facts
+  get orphaned from their context — the chunk says "the fee is 11.5%" and the
+  qualifier "for Premium-plan sellers" lives in the neighboring chunk that
+  didn't get retrieved. Too large (2,000+ tokens) and each chunk's single
+  embedding vector has to average several topics, so it matches everything
+  weakly and nothing well — and each retrieved chunk burns 2,000 tokens of
+  context budget mostly on irrelevant text, pushing the relevant sentence into
+  the middle of a long prompt where models demonstrably attend worst ("lost in
+  the middle"). There is no universal right size; 256–1,024 with overlap is
+  where most systems land after tuning.
+- **Embedding drift: the index is married to one embedder.** Query vectors and
+  chunk vectors must come from the same model — cosine between two different
+  models' spaces is meaningless, even at identical dimensionality
+  (`text-embedding-ada-002` and `text-embedding-3-small` are both 1,536-d and
+  mutually incompatible). So upgrading your embedding model means
+  **re-embedding the entire corpus** and cutting over atomically. Teams that
+  upgrade the query side "to get the better model" while old vectors sit in
+  the index watch retrieval quality quietly collapse.
+- **You now operate a search engine.** RAG replaces "call one API" with an
+  embedding pipeline, a vector database, index refreshes on every document
+  change, per-query retrieval latency (an embed call plus an ANN lookup ahead
+  of first token), and a relevance-quality metric nobody owns by default.
+  Stale index entries are the classic silent failure: the doc was updated, the
+  vector wasn't, and retrieval keeps serving the old fact verbatim — RAG's
+  headline advantage, easy updates, only holds if the pipeline actually runs.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why does RAG beat fine-tuning for keeping facts current? Give the mechanical reasons, not vibes.">
+Three mechanisms. First, retrieved facts arrive **verbatim in context** — the
+model reads "12.9%" off the prompt, whereas fine-tuning compresses facts into
+weight updates spread across millions of shared parameters, with no guarantee
+of exact recall. Second, **updates are an index write**: re-embed one changed
+document and it is live on the next query; the fine-tuning equivalent is a new
+training run plus redeployment. Third, **hallucination becomes boundable** —
+you can log exactly which chunks the model saw, check the answer against them,
+and instruct it to answer only from context; a fine-tuned model's recall is
+uninspectable. The trade: RAG pays per-query (retrieval latency plus context
+tokens) while fine-tuning pays once.
+</Drill>
+
+<Drill q="So when is fine-tuning the right tool instead of RAG?">
+When the gap is **behavior, not facts**: output format, tone, domain
+vocabulary, following a house style, reasoning patterns — things expressed
+across every token rather than stored as retrievable statements. No retrieved
+paragraph makes a model consistently emit valid FHIR JSON; a few thousand
+training examples do. Fine-tuning also wins when the knowledge is genuinely
+stable and query volume is huge — amortizing one training run beats paying
+retrieval latency and 2,000 prompt tokens on every call. The two compose:
+fine-tune the behavior, RAG the facts.
+</Drill>
+
+<Drill q="What kind of model produces the retrieval embeddings, and why isn't it the generator?">
+An encoder-style, **bidirectional** model — the masked-language-model lineage
+from the autoregressive-vs-masked topic. Retrieval wants one vector
+representing the whole passage, so every token should attend to every other
+token, both directions; a causal mask would build a representation of the text
+mostly from its ending. Embedders are typically BERT-family encoders
+contrastively trained so that matching query/passage pairs land close in the
+space. The newer wave of decoder-based embedders (E5-Mistral, NV-Embed) starts
+from an autoregressive LLM — and then removes the causal mask or pools over
+all positions to embed, which concedes the point: representation wants
+bidirectional attention. The autoregressive model is kept for generation
+because it is the one that can decode fluent text token by token. RAG is
+precisely the pipeline that lets each architecture do the half it is good at.
+</Drill>
+
+<Drill q="Cosine similarity vs dot product for retrieval — when do they differ and which do production systems use?">
+Cosine is the dot product of **normalized** vectors — it compares direction
+and ignores magnitude. Raw dot product also rewards vector *length*, and
+embedding norms correlate with incidental properties like passage length and
+token frequency rather than topical relevance, so unnormalized dot product
+biases retrieval toward whatever happens to embed long. Production systems
+mostly normalize all vectors at index time and then use plain dot product —
+mathematically identical to cosine but cheaper per comparison, which matters
+across millions of ANN candidates. If someone's index mixes normalized and
+unnormalized vectors, their scores are not comparable — that's a real bug
+class.
+</Drill>
+
+<Drill q="Walk the chunk-size trade-off. What actually degrades at each extreme?">
+Small chunks embed **precisely** — one topic per vector, sharp cosine matches
+— but sever facts from qualifiers: the retrieved sentence says "11.5%" and the
+"Premium plan only" condition sat in the next chunk. Large chunks keep context
+intact but their one vector must **average multiple topics**, so similarity
+scores flatten toward mediocre-for-everything; and each retrieval spends
+thousands of context-window tokens on mostly irrelevant text, burying the
+answer mid-prompt where attention is weakest. Overlap (10–20%) patches the
+boundary-severing problem at the cost of index size. The honest answer to
+"what chunk size?" is: measure retrieval hit-rate on your own queries;
+256–1,024 tokens is the empirical basin.
+</Drill>
+
+<Drill q="Your RAG system answers a question the corpus can't answer — confidently and wrong. Diagnose the mechanism and name the mitigations.">
+Mechanism: top-k retrieval is an argmax with **no notion of 'good enough'** —
+the query embedded into a region the corpus doesn't cover, the k nearest
+chunks were all low-similarity junk, they got stuffed into the prompt anyway,
+and the model, given a question plus text that doesn't answer it, generated
+from its priors — a hallucination wearing a citation. Mitigations, in order of
+leverage: a **similarity floor** that routes low-score retrievals to "I don't
+know"; **hybrid BM25 + vector** so lexical matches catch what semantics
+missed; a **cross-encoder reranker** that reads query and chunk together and
+scores relevance far better than bi-encoder cosine; and prompt-side
+instructions to refuse when context is insufficient — necessary but weakest
+alone, because the model's compulsion to be helpful reliably beats a polite
+instruction.
+</Drill>
+
+</Section>

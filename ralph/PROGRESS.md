@@ -32,7 +32,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 14 | catastrophic-forgetting  | finetune   | done   | [outline](outlines/catastrophic-forgetting.md) | dd85bba |
 | 15 | distillation             | finetune   | done   | [outline](outlines/distillation.md)       | 6b43634 |
 | 16 | vocabulary-handling      | finetune   | done   | [outline](outlines/vocabulary-handling.md)| 3c17aa1 |
-| 17 | rag                      | advanced   | todo   | [outline](outlines/rag.md)                |        |
+| 17 | rag                      | advanced   | done   | [outline](outlines/rag.md)                | 7d90171 |
 | 18 | chain-of-thought         | advanced   | todo   | [outline](outlines/chain-of-thought.md)   |        |
 | 19 | mixture-of-experts       | advanced   | todo   | [outline](outlines/mixture-of-experts.md) |        |
 | 20 | zero-shot-vs-few-shot    | advanced   | todo   | [outline](outlines/zero-shot-vs-few-shot.md) |     |
