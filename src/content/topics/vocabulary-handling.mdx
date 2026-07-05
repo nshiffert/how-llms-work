@@ -1,0 +1,265 @@
+---
+title: Vocabulary Handling
+category: finetune
+hook: Vocab size is a dial between sequence length and embedding-table size — and it decides how a rare word shatters.
+crossLinks:
+  - tokenization
+  - context-window
+  - embeddings
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import VocabSizeExplorer from '../../components/islands/VocabSizeExplorer.tsx';
+
+<Section n={1} title="What vocabulary handling is" tag="A fixed token set with a size cap — and a fallback instead of an unknown token">
+
+A model cannot give every possible word its own token. English alone has
+hundreds of thousands of words before you count names, typos, chemical
+compounds, and code identifiers — and the model's vocabulary has to be *fixed*
+before training, because every token gets a row in the embedding table and a
+column in the output softmax (see the Embeddings topic). So the vocabulary is
+capped: byte-pair encoding (BPE, from the Tokenization topic) merges frequent
+symbol pairs until it hits a target size — anywhere from 32K (Llama 2) to
+~200K (GPT-4o's `o200k_base`), with 50K–150K the common middle — and then it
+simply **stops**.
+
+Everything the merge budget didn't reach is handled by decomposition, not by a
+special token. `pembrolizumab` never earned its own entry, so the tokenizer
+rebuilds it from smaller in-vocabulary pieces — `rol`, `iz`, `umab` — and in
+the worst case from raw bytes. There is **no `[UNK]` token** in a modern
+byte-level BPE model. The base vocabulary is the 256 possible byte values, so
+*every* string has a valid encoding; the only question is how many pieces it
+costs.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> A model's vocabulary
+  is the fixed set of tokens its BPE training produced before hitting the size
+  cap. In-vocabulary text encodes to few tokens; anything rarer decomposes into
+  smaller sub-word pieces, bottoming out at single bytes — never at an unknown
+  token. Vocabulary size is therefore a <em>dial</em>: bigger vocab → shorter
+  sequences but a larger embedding table and output layer; smaller vocab → the
+  reverse.
+</div>
+
+This lives in the fine-tuning section for a practical reason: the tokenizer is
+the one part of a base model you effectively cannot change. When you fine-tune
+on medical notes, legal contracts, or another language, you inherit a
+vocabulary that was optimized for general web text — and your domain pays the
+token tax that follows.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Truncate the merge list = train a smaller vocab; watch the dial move">
+
+BPE builds its vocabulary greedily, most-frequent merge first (the Tokenization
+topic steps through this). That ordering has a useful consequence: **a
+vocabulary capped at 32K is exactly the first 32K entries of the same merge
+list**. Stopping training earlier and deleting the tail of the merge list are
+the same operation. So you can see precisely what a smaller vocabulary would
+have done to your text by re-running the encoder while ignoring every merge
+past the cap.
+
+That is what this instrument does — it runs GPT-4o's real `o200k_base` merge
+list, truncated at five different caps, over the same text:
+
+<VizFrame
+  label="Vocabulary size explorer · o200k_base truncated at five caps"
+  caption="Same text, five vocabulary sizes, top row smallest. Try the Clinical note preset: token count drops as the cap grows, while the embedding-table figure (dim 4096, fp16) grows with it — that pair of opposing columns is the whole trade-off. Then try Rare drug name and watch pembrolizumab shatter into more pieces at each smaller cap, and Japanese at 1K to see amber hex chips: tokens that fell all the way back to raw bytes, the fallback that replaces [UNK]."
+>
+  <VocabSizeExplorer client:only="react" />
+</VizFrame>
+
+Reading the dial in both directions:
+
+- **Bigger vocabulary** → more words and word-fragments own a single token, so
+  sequences shrink. Shorter sequences mean fewer forward passes per document,
+  less attention compute (which scales quadratically in sequence length), and
+  more content per context window. The cost: the embedding table and the
+  output softmax both scale linearly with vocabulary size — at dimension
+  4096 in fp16, each 1,000 extra tokens is ~8 MB more in the embedding table,
+  and the same again in the output projection if the two aren't weight-tied.
+- **Smaller vocabulary** → a leaner table and cheaper softmax, but everything
+  rare shatters. At a 1K cap, ordinary English words split into two or three
+  pieces each and sequences run ~2× longer than at 200K.
+
+Production models sit where those curves cross for *their* training
+distribution — which is dominated by general web English. That is the origin
+of the domain token tax in Section 4: the dial was tuned for someone else's
+text.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="One drug name at five caps, and the memory bill for each">
+
+Take `pembrolizumab` — a blockbuster cancer immunotherapy, common in clinical
+notes, rare on the general web. Encoding ` pembrolizumab` (leading space, as it
+appears mid-sentence) with the o200k merge list truncated at each cap:
+
+| vocab cap | pieces | encoding |
+| --- | --- | --- |
+| 1,000 | 8 | ` p` · `em` · `b` · `ro` · `l` · `iz` · `um` · `ab` |
+| 8,000 | 6 | ` p` · `emb` · `rol` · `iz` · `um` · `ab` |
+| 32,000 | 6 | ` p` · `emb` · `rol` · `iz` · `um` · `ab` |
+| 100,000 | 5 | ` pemb` · `rol` · `iz` · `um` · `ab` |
+| 199,998 (full) | 4 | ` pemb` · `rol` · `iz` · `umab` |
+
+Even at 200K the word is four fragments — it never gets a single token. Note
+the pieces it does get are morphemes BPE learned from *other* drugs: `umab`
+is the standard suffix for human monoclonal antibodies (nivolumab,
+adalimumab…), frequent enough across the corpus to earn a merge.
+
+The other side of the dial is the memory bill. Embedding table = vocabulary ×
+model dimension; at dimension 4,096 in fp16 (2 bytes/parameter):
+
+| vocab | embedding params | memory (fp16) |
+| --- | --- | --- |
+| 1,000 | 4.1M | 8.2 MB |
+| 32,000 | 131M | 262 MB |
+| 100,000 | 410M | 819 MB |
+| 200,000 | 819M | 1.64 GB |
+
+Double those figures if the output projection isn't weight-tied to the
+embedding table — and remember the output softmax computes a logit for every
+one of those rows at every generated token.
+
+You can measure the sequence-length side with three real tokenizers, which
+happen to sit near three points on the dial (GPT-2/3's `r50k_base` at 50,257,
+GPT-4's `cl100k_base` at 100,277, GPT-4o's `o200k_base` at 200,019 — that
+total counts special and reserved ids on top of the 199,998 learned merges
+the truncation table above is cut from):
+
+```python
+import tiktoken
+
+clinical = ("Pt c/o SOB w/ DOE. PMH: HFrEF (EF 25%), CKD3b, T2DM. "
+            "Meds: sacubitril/valsartan 97/103mg BID.")
+plain = ("The patient came in short of breath after walking, "
+         "with a history of heart failure.")
+
+for name in ["r50k_base", "cl100k_base", "o200k_base"]:
+    enc = tiktoken.get_encoding(name)
+    print(name, len(enc.encode(clinical)), len(enc.encode(plain)))
+
+# r50k_base    48  17      <- 50K vocab
+# cl100k_base  48  17      <- 100K vocab
+# o200k_base   45  17      <- 200K vocab
+```
+
+Two things worth staring at. First, the clinical shorthand costs 45 tokens for
+93 characters while the plain sentence costs 17 for 83 — **2.07 chars/token
+vs 4.88, a 2.4× tax** — because `HFrEF`, `CKD3b`, and dose strings never
+earned merges. Second, quadrupling the vocabulary from 50K to 200K barely
+dents that (48 → 45): the extra 150K slots went to whatever was frequent on
+the general web, not to nephrology staging codes. A bigger generic vocabulary
+is not a domain vocabulary.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="The token tax, shattered entities, and why nobody fixes it">
+
+- **Domain text tokenizes 2–3× longer — and that eats the context budget.**
+  The clinical note above runs 2.4× more tokens per character than plain
+  English; Japanese runs ~1 character per token against English's ~4–5 (a
+  3–5× tax per unit of text, as the Tokenization topic shows). Your context
+  window is denominated in tokens (the Context Window topic), so a "128K"
+  window holds proportionally *less medicine, law, or Japanese* than it holds
+  blog posts. Same for your API bill and your latency — every one of those
+  extra tokens is a full forward pass at generation time.
+- **Rare proper nouns shatter, and their meaning arrives in fragments.** The
+  model's knowledge of `pembrolizumab` has to be assembled by attention over
+  ` pemb`+`rol`+`iz`+`umab` — there is no single embedding row that means the
+  drug (see Embeddings). Fragile lookup of near-identical names
+  (nivolumab/ipilimumab), worse entity recall, and misspellings that produce
+  wildly different fragment sequences are the downstream symptoms.
+- **The fallback hides failures instead of raising them.** Because byte-level
+  BPE never produces `[UNK]`, garbage input doesn't error — corrupted
+  encodings, binary blobs, or emoji soup silently become long runs of byte
+  tokens the model has barely trained on. You find out from output quality,
+  not from an exception.
+- **Custom domain vocabularies exist and are rarely worth it.** You *can*
+  extend a tokenizer with 5K medical tokens: resize the embedding table and
+  output head, initialize the new rows (randomly, or from the mean of each
+  token's old pieces), and train long enough for those rows to become
+  meaningful. In exchange you break token-for-token compatibility with the
+  base model's checkpoints, every pre-tokenized dataset and eval harness
+  keyed on the old ids, every published LoRA adapter, and speculative
+  decoding (draft and target model must share a tokenizer) — and an
+  under-trained new row behaves like a glitch token.
+  Most teams measure the 2–3× tax, compare it with that engineering bill, and
+  just pay the tax.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="What actually happens when a modern LLM meets a word that isn't in its vocabulary?">
+Decomposition, not a special token. Byte-level BPE replays its merge list
+against the text; whatever the merges don't cover falls apart into smaller
+in-vocabulary sub-words, bottoming out at single bytes — the 256 byte values
+are the base vocabulary, so every possible string encodes. There is no
+`[UNK]` in GPT-2-onward tokenizers. The cost of rarity is paid in *length*
+(more pieces) and in *representation quality* (meaning assembled from
+fragments), not in an error.
+</Drill>
+
+<Drill q="State the vocabulary-size trade-off precisely. What scales with what?">
+Bigger vocabulary: more strings own a single token, so sequences get shorter —
+fewer decode steps, less quadratic attention cost, more content per context
+window. But the embedding table and the output softmax each scale linearly
+with vocabulary: at dim 4096 fp16, a 200K vocab is 1.64 GB of embeddings
+(819M parameters) versus 262 MB at 32K — times two if input and output
+aren't weight-tied — and every generated token computes a logit per row.
+Smaller vocabulary flips both signs. Production models pick the crossing
+point for their (web-dominated) training mix.
+</Drill>
+
+<Drill q="Why does medical or legal text cost 2–3× more tokens, when the tokenizer handles it without errors?">
+BPE spent its merge budget on what was frequent in the training corpus —
+general web English. `HFrEF` and `sacubitril` weren't frequent, so they never
+earned merges and shatter into 2–8 pieces each: measured with o200k, clinical
+shorthand runs ~2.1 chars/token against ~4.9 for plain English, a 2.4× tax.
+No error is raised because byte fallback always succeeds — the cost surfaces
+as context-window budget, latency, and API spend instead. And growing a
+generic vocab doesn't fix it: 50K→200K only moved that clinical sentence from
+48 to 45 tokens, because the new slots went to globally frequent strings, not
+domain terms.
+</Drill>
+
+<Drill q="When is building a custom domain vocabulary worth it, and what does it actually involve?">
+Almost never for fine-tuning; sometimes for pretraining from scratch. Extending
+an existing model means resizing the embedding table and output head, choosing
+an initialization for the new rows (random, or the mean of the pieces each new
+token replaces), and training enough for those rows to stop being glitch
+tokens — while breaking compatibility with base checkpoints and existing LoRA
+adapters, since the same text now maps to different token ids. That bill only
+beats the 2–3× token tax at scale: code models and non-English models trained
+from scratch (where the vocab can be learned on the target distribution) are
+the cases that clear the bar. A team fine-tuning on 50K clinical notes should
+just pay the tax.
+</Drill>
+
+<Drill q="A colleague says 'GPT-4o has a 200K vocabulary, so it must handle rare drug names well.' What's wrong with that reasoning?">
+Vocabulary slots go to corpus-frequent strings, not to important ones.
+o200k's extra ~100K entries over cl100k mostly bought shorter encodings for
+common words and non-Latin scripts; `pembrolizumab` is still four fragments
+(` pemb`·`rol`·`iz`·`umab`) at 200K, versus five at 100K — barely a change.
+Frequency in the tokenizer's corpus is the only currency. The observable
+consequence: a domain-heavy prompt still tokenizes ~2× longer than plain
+English, whatever the headline vocab size.
+</Drill>
+
+<Drill q="How does vocabulary size interact with the context window and the embedding layer at once?">
+It's one dial touching both. Sequence side: the context window is a fixed
+token budget, and vocab size sets the exchange rate from characters to tokens
+— halve the effective vocab coverage for your domain and the same window
+holds roughly half the text. Memory side: each vocab entry is a row of the
+embedding table and a column of the output projection (vocab × dim each), so
+vocab growth is linear in parameters and in the per-token softmax cost.
+That's why it's a genuine trade-off and not a free win in either direction —
+and why the answer differs for a code model, a multilingual model, and a
+general chat model.
+</Drill>
+
+</Section>

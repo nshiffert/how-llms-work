@@ -137,7 +137,7 @@ export const TOPICS: Topic[] = [
     title: 'Vocabulary Handling',
     hook: 'Vocab size is a dial between sequence length and embedding-table size — and it decides how a rare word shatters.',
     category: 'finetune',
-    status: 'planned',
+    status: 'ready',
     viz: 'Same text, four vocab sizes',
   },
 
