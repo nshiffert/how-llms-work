@@ -1,0 +1,293 @@
+---
+title: Zero-shot vs Few-shot
+category: advanced
+hook: Examples in the prompt are weight-free learning — accuracy climbs as you spend context on demonstrations.
+crossLinks:
+  - attention
+  - context-window
+  - chain-of-thought
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import FewShotPromptBuilder from '../../components/islands/FewShotPromptBuilder.tsx';
+
+<Section n={1} title="What zero-shot and few-shot are" tag="Adapting behavior without touching a single weight">
+
+There are two ways to make a language model do a new task. The expensive way is
+training: collect labeled data, run gradient descent, change the weights. The
+cheap way is the one this lesson is about: change **nothing but the prompt**.
+
+**Zero-shot** means you describe the task in words and rely entirely on
+pretraining to supply the skill: *"Translate the following English to
+French:"*. No examples — the instruction itself has to select the right
+behavior out of everything the model absorbed during training.
+
+**Few-shot** means you prepend a handful of worked input→output pairs before
+your actual query, and the model continues the pattern:
+
+```text
+English: sea otter
+French: loutre de mer
+English: peppermint
+French: menthe poivrée
+English: cheese
+French:
+```
+
+The startling part is what does *not* happen. No gradient step runs. No weight
+moves. The "learning" — and on real benchmarks it looks exactly like learning,
+with accuracy climbing as examples are added — happens entirely inside one
+forward pass, because the examples are sitting in the context window where
+attention can read them.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> <strong>Zero-shot</strong>:
+  the prompt contains only a task description; performance comes from
+  pretraining alone. <strong>Few-shot</strong>: the prompt also contains
+  <em>k</em> demonstration pairs, and the model infers the task from them at
+  inference time — <strong>in-context learning</strong>, with frozen weights
+  and no gradient updates.
+</div>
+
+The numbers that made this famous come from the GPT-3 paper (Brown et al.
+2020), which is literally titled *"Language Models are Few-Shot Learners"*. On
+TriviaQA, GPT-3 175B scores **64.3%** with zero examples, **68.0%** with one,
+and **71.2%** with 64 — a fine-tuned-model-class score, reached by editing a
+string. That paper is also where the terms zero-shot/one-shot/few-shot got
+their modern prompting meaning; before it, "few-shot" usually implied
+gradient updates on a few examples.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Demonstrations become context; attention completes the pattern in one forward pass">
+
+Follow one few-shot query through the model and there is no mystery left.
+The demonstration pairs are tokenized like any other text and enter the
+context window as ordinary tokens. When the model predicts the token after
+`French:`, attention does what attention always does: every position computes
+query·key scores against every earlier position, and at the answer position
+the heavy weights land on the demonstration tokens. The prediction is
+conditioned on them: the pattern *English word → its French translation* is
+detected and extended **within a single forward pass**. That is all
+"in-context learning" is: conditioning, doing work that looks like learning.
+
+Why the weight lands there is exactly what mechanistic interpretability work
+has pinned down — there is located circuitry for this behavior. Olsson
+et al. 2022 identified **induction heads** — attention heads that implement
+"find an earlier occurrence of something like the current token, look at what
+followed it, and predict that": `[A][B] … [A] → [B]`. These heads emerge
+abruptly during training, and their formation coincides with a jump in the
+model's in-context learning ability. A few-shot prompt is exactly the input
+that pattern-completion machinery is built for — each demonstration plants an
+`[A][B]` pair for the query's `[A]` to match against.
+
+Two consequences fall straight out of the mechanism:
+
+- **The effect scales with the model, not the prompt.** In-context learning is
+  weak in small models and strong in large ones — GPT-3's headline figure
+  shows the zero-shot→few-shot gap *widening* with parameter count. The
+  demonstrations don't carry the skill; they select and configure a skill the
+  pretrained weights already contain.
+- **Everything is rented, not owned.** The examples live in the
+  context window, so they consume budget on every call, compete
+  with your actual content for space, and vanish when the request ends.
+
+<VizFrame
+  label="Few-shot prompt builder — accuracy vs context spent"
+  caption="Click 0/1/3/5-shot to build GPT-3's own Figure 2.1 translation prompt. Left: the literal prompt, with the real o200k_base token price of every demonstration. Right: where each regime lands on GPT-3 175B's published accuracy. Notice the shape: the first example buys the most, later ones buy less — and on LAMBADA a single example makes things worse."
+>
+  <FewShotPromptBuilder client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">When to use which.</span> Zero-shot is
+  for tasks the model has surely seen a million times in pretraining —
+  translation, summarization, standard Q&amp;A — where an instruction is
+  enough. Few-shot earns its token cost when the <em>format</em> is the hard
+  part: domain-specific output shapes, custom label sets, unusual reasoning
+  styles, anything where "show, don't tell" pins down what an instruction
+  leaves ambiguous. Chain-of-thought prompting is the flagship case: its
+  original form was few-shot, with demonstrations whose outputs are worked
+  reasoning chains.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="GPT-3's own translation prompt, token-priced with tiktoken">
+
+Take the exact task from Figure 2.1 of the GPT-3 paper — English→French — and
+price it. The zero-shot prompt is instruction plus query:
+
+```text
+Translate English to French.
+English: cheese
+French:
+```
+
+Under `o200k_base` (GPT-4o's tokenizer) that is **11 tokens**. Now add
+demonstrations one at a time and count again:
+
+| prompt | demonstration added | marginal tokens | total tokens |
+| --- | --- | --- | --- |
+| zero-shot | — | — | **11** |
+| 1-shot | sea otter → loutre de mer | +14 | **25** |
+| 2-shot | peppermint → menthe poivrée | +12 | 37 |
+| 3-shot | plush giraffe → girafe en peluche | +14 | **51** |
+| 4-shot | stained glass → vitrail | +10 | 61 |
+| 5-shot | lighthouse → phare | +8 | **69** |
+
+(The bolded totals — 11, 25, 51, 69 — are the four prompts you can build in
+the widget above.)
+
+Each demonstration costs 8–14 tokens, so the 5-shot prompt is **6.3×** the
+size of the zero-shot one — for the identical question. The counting is four
+lines of code:
+
+```python
+import tiktoken
+enc = tiktoken.get_encoding("o200k_base")          # GPT-4o's vocabulary
+
+examples = [("sea otter", "loutre de mer"),
+            ("peppermint", "menthe poivrée"),
+            ("plush giraffe", "girafe en peluche"),
+            ("stained glass", "vitrail"),
+            ("lighthouse", "phare")]
+
+def build_prompt(k):
+    demos = "".join(f"\nEnglish: {en}\nFrench: {fr}" for en, fr in examples[:k])
+    return f"Translate English to French.{demos}\nEnglish: cheese\nFrench:"
+
+for k in [0, 1, 3, 5]:
+    print(k, len(enc.encode(build_prompt(k))))     # 0→11, 1→25, 3→51, 5→69
+```
+
+Set the accuracy side of the ledger against the cost side, using GPT-3 175B's
+published numbers:
+
+- **TriviaQA:** 64.3% (0-shot) → 68.0% (1-shot) → 71.2% (64-shot). The first
+  example bought **+3.7 points**; the remaining 63 averaged **+0.05 each**.
+- **LAMBADA:** 76.2% (0-shot) → 72.5% (1-shot) → 86.4% (few-shot). One
+  example *lost* 3.7 points before more of them won 10 back.
+
+That curve shape — steep, then flat, occasionally dipping — is the practical
+answer to "how many examples should I use?": the first few do almost all the
+work. And unlike fine-tuning, whose training cost is paid once and amortized
+over every future call, few-shot demonstrations are rent — those 58 extra
+tokens (84% of the 5-shot prompt) are re-sent, re-embedded, and re-attended
+on **every single request, forever**.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Recurring token rent, ordering landmines, diminishing returns">
+
+Few-shot prompting fails in ways that all trace back to the same fact: the
+examples are just tokens in the context, not knowledge in the weights.
+
+- **Demonstrations eat the context budget — every call.** Toy demos cost 8–14
+  tokens, but real ones (a full support ticket, a contract clause, a worked
+  proof) run hundreds to thousands each; a 32-shot prompt of ~900-token
+  documents is ~28,800 tokens of rent before your actual input arrives.
+  Longer prompts also mean quadratically more attention compute and less room
+  for the content you actually care about.
+- **Order shouldn't matter, but it does.** The same demonstrations in a
+  different order can swing accuracy from near-chance to near
+  state-of-the-art — on SST-2 sentiment, permuting a handful of examples
+  moves GPT-family models across that whole range (Lu et al. 2021; Zhao et
+  al. 2021 show the same instability on GPT-3 when the example set varies).
+- **The model copies your biases.** With imbalanced labels it drifts toward
+  the **majority label**; it over-predicts the label of the **most recent**
+  demonstration (recency bias). Zhao et al.'s fix — calibrating outputs
+  against a content-free `N/A` input — recovers up to ~30 points, which tells
+  you how much of "few-shot accuracy" can be bias rather than task skill.
+- **Demonstrations teach format more than mapping.** Min et al. 2022 replaced
+  the demos' gold labels with *random* ones and accuracy barely moved across
+  a dozen models. The examples mostly convey the input distribution, the
+  label space, and the output format — so a plausible-looking demo with a
+  wrong label often won't even be noticed. Don't assume the model "studied"
+  your examples the way a student would.
+- **One example can hurt.** LAMBADA one-shot (72.5%) scores *below* zero-shot
+  (76.2%) — a lone demonstration can mis-frame the task as easily as it
+  frames it.
+- **Nothing persists.** The next request starts from zero: no memory, no
+  accumulation, no improvement over time. If the same examples ride along on
+  a million calls a day, that is the signal to move the knowledge into the
+  weights with fine-tuning (LoRA makes this cheap) — or into a retrieval
+  system that fetches only the relevant context per query.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Few-shot works with completely frozen weights. Walk me through the mechanism.">
+The demonstrations are tokenized into the context window like any other text.
+At the answer position, attention computes query·key relevance against every
+earlier token, the demonstration tokens score as highly relevant, and the
+prediction is conditioned on them — the pattern is recognized and extended in
+a single forward pass. No gradient runs. Mechanistically, induction heads
+(Olsson et al. 2022) implement exactly this: find a previous occurrence of
+[A], attend to the [B] that followed it, predict [B]. So few-shot prompting is
+an attention phenomenon, not a training phenomenon — which is why the
+capability scales with model size, not with prompt effort.
+</Drill>
+
+<Drill q="Define 'in-context learning' precisely, and say what it is not.">
+In-context learning is a model's ability to infer and execute a task from
+demonstrations supplied in the prompt, at inference time, with fixed weights —
+learning-like behavior produced purely by conditioning the forward pass on
+the examples. It is not learning in the parametric sense: no weights change,
+nothing generalizes beyond this one context, and everything "learned"
+evaporates when the request ends. Calling it "learning" is a description of
+the input-output behavior (accuracy climbs with examples, as if trained), not
+of any update happening inside the model.
+</Drill>
+
+<Drill q="When do you choose zero-shot, when few-shot, and when do you stop prompting and fine-tune?">
+Zero-shot for tasks pretraining has surely covered — translation,
+summarization, generic Q&amp;A — where an instruction is enough and every
+token saved matters. Few-shot when the format is the hard part: custom label
+sets, domain-specific output shapes, unusual reasoning styles — show, don't
+tell. Fine-tune when the demonstrations have become permanent residents: if
+the same k examples ride on every call at scale, you're paying recurring
+token rent (plus quadratic attention cost) for knowledge that could be paid
+for once and moved into the weights — LoRA makes that cheap. Rule of thumb:
+prompting buys adaptation per-request; fine-tuning amortizes it.
+</Drill>
+
+<Drill q="What does each added example actually cost, and what does it buy? Use real numbers.">
+Cost: its token length, on every future call. In the GPT-3 translation demo,
+each pair costs 8–14 o200k tokens, taking the prompt from 11 tokens (0-shot)
+to 69 (5-shot) — 6.3× the price for the same question; real-world
+demonstrations run hundreds of tokens each. Buy: steeply diminishing accuracy.
+GPT-3 175B on TriviaQA: +3.7 points for the first example, then ~+0.05 per
+example averaged over the next 63. And the sign isn't guaranteed — LAMBADA
+drops from 76.2 to 72.5 going 0→1 shot. The first few examples do almost all
+the work; after that you're spending context window for noise.
+</Drill>
+
+<Drill q="You randomize the labels in your few-shot demos and accuracy barely drops. What's going on?">
+That's Min et al. 2022, and it exposes what demonstrations actually transmit:
+the input distribution, the label space, and the output format — much more
+than the input→label mapping itself. The pattern-matching machinery locks
+onto the structure of the demos and onto task knowledge already in the
+weights; it isn't inducing the mapping from your k examples the way a
+supervised learner would. Practical consequences: audit your demos for
+format and coverage rather than agonizing over gold-label perfection, and
+don't expect few-shot to teach a mapping the pretrained model doesn't
+already latently know.
+</Drill>
+
+<Drill q="How does chain-of-thought prompting relate to few-shot?">
+Original chain-of-thought (Wei et al. 2022) IS few-shot prompting — the
+demonstrations' outputs are worked reasoning chains instead of bare answers,
+so the model imitates the visible-steps format. The two effects then stack:
+few-shot supplies the format ("show your intermediate steps"), and the
+generated steps become context tokens that later steps attend to, turning one
+hard hop into many easy ones. That combination lifted PaLM 540B on GSM8K from
+17.9% to 56.9% with zero weight changes. Zero-shot CoT ("let's think step by
+step") later showed the instruction alone can trigger the format — weaker,
+but example-free.
+</Drill>
+
+</Section>

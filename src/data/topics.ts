@@ -205,7 +205,7 @@ export const TOPICS: Topic[] = [
     title: 'Zero-shot vs Few-shot',
     hook: 'Examples in the prompt are weight-free learning — accuracy climbs as you spend context on demonstrations.',
     category: 'advanced',
-    status: 'planned',
+    status: 'ready',
     viz: 'Prompt builder + accuracy curve',
   },
 
