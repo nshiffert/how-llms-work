@@ -26,7 +26,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 8  | beam-vs-greedy           | generation | done   | [outline](outlines/beam-vs-greedy.md)     | 1fc1be2 |
 | 9  | temperature              | generation | done   | [outline](outlines/temperature.md)        | 65df4e3 |
 | 10 | top-k-top-p              | generation | done   | [outline](outlines/top-k-top-p.md)        | bb54125 |
-| 11 | autoregressive-vs-masked | generation | done   | [outline](outlines/autoregressive-vs-masked.md) | f020cae |
+| 11 | autoregressive-vs-masked | generation | done   | [outline](outlines/autoregressive-vs-masked.md) | 9616714 |
 | 12 | lora                     | finetune   | todo   | [outline](outlines/lora.md)               |        |
 | 13 | qlora                    | finetune   | todo   | [outline](outlines/qlora.md)              |        |
 | 14 | catastrophic-forgetting  | finetune   | todo   | [outline](outlines/catastrophic-forgetting.md) |   |
