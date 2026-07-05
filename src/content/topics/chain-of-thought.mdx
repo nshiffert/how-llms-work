@@ -1,0 +1,313 @@
+---
+title: Chain-of-Thought
+category: advanced
+hook: The intermediate tokens aren’t decoration — each step becomes context that anchors the next, turning one hard hop into many easy ones.
+crossLinks:
+  - attention
+  - autoregressive-vs-masked
+  - zero-shot-vs-few-shot
+  - temperature
+  - context-window
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import CotScratchpadExplorer from '../../components/islands/CotScratchpadExplorer.tsx';
+
+<Section n={1} title="What chain-of-thought is" tag="One hard hop is unreliable; many easy hops aren't">
+
+Take a model, ask it a two-step arithmetic word problem, and demand the answer
+directly — it often gets it wrong. Append one line to the prompt, *"Let's think
+step by step,"* and the same model, same weights, no retraining, does
+dramatically better: that single phrase lifted GPT-3 (text-davinci-002) from
+**10.4% to 40.7%** on the GSM8K math benchmark (Kojima et al. 2022). Show it a
+few worked step-by-step solutions instead of the bare phrase and the effect
+gets bigger still — few-shot chain-of-thought prompting moved PaLM 540B from
+**17.9% to 56.9%** on the same benchmark (Wei et al. 2022). Nothing about the
+models changed. What changed is what they were allowed to *write down* before
+committing to an answer.
+
+Chain-of-thought (CoT) prompting means asking the model to produce intermediate
+reasoning tokens before its final answer, instead of jumping straight to the
+answer. The reason it works is not psychology. An autoregressive model predicts
+one token per forward pass, and attention can only read tokens that actually
+exist in the context. A direct answer forces the entire multi-step computation
+to happen inside the transient activations of a single position — one hard hop.
+A stepwise answer lets the model emit each intermediate result as a real token,
+where every later prediction can attend to it — many easy hops.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Chain-of-thought is a
+  <em>prompting technique</em> that elicits intermediate reasoning tokens before
+  the answer. It works because autoregressive generation feeds every emitted
+  token back into the context, so the intermediate steps become
+  <strong>attention targets</strong> for everything generated after them — a
+  scratchpad the model builds for itself, one token at a time.
+</div>
+
+Note what that definition does *not* say: it does not say the model has a
+reasoning module that gets switched on. CoT is not architectural. It is an
+emergent consequence of two mechanics you already know — autoregressive
+generation (each output token is appended to the input) and attention (any
+token can read any earlier token). The prompt just steers the model into a
+region of output space where the useful intermediate values get written where
+attention can reach them.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Emit a token → it joins the context → the next prediction attends to it">
+
+Trace what a single forward pass can and cannot do. Predicting the next token
+at position $t$ runs the stack of transformer layers once over positions
+$1..t$. Any "working memory" the model has for that prediction lives in the
+activations of that one pass — and those activations are discarded the moment
+the token is sampled. There is no persistent scratch space between forward
+passes. The **only** thing that survives from one prediction to the next is
+the token that was emitted, because it gets appended to the context.
+
+That is the entire trick. If the model needs the value 3 (from 23 − 20) to
+compute 3 + 6 = 9, it has two options. Option one: compute both steps inside
+one pass and hope the intermediate value survives inside the layer activations
+of that single position — fragile, and it visibly fails on the left side below. Option
+two: *emit* "3" as a token. Now 3 is not a fleeting activation — it is a
+first-class context token with its own key and value vectors, and the
+prediction of "9" can pull it in through an ordinary attention lookup, exactly
+the way the attention lesson showed a query reading earlier positions.
+
+<VizFrame
+  label="Direct answer vs chain-of-thought — same model, same question"
+  caption="Left: press “predict answer token” — one forward pass must do both arithmetic steps internally, and the next-token distribution comes out smeared with the argmax on 27, which is wrong. Right: generate the scratchpad token by token, then click the dotted result tokens (3, 9., final 9) to see the attention each one cast over the context when it was predicted. Notice the final 9 barely computes anything — it puts 0.41 of its attention on the “9.” that step 2 already wrote."
+>
+  <CotScratchpadExplorer client:visible />
+</VizFrame>
+
+Read the right panel the way the model does. Predicting "3" only requires
+attending to "23 − 20 =" — tokens the model itself wrote two positions ago.
+Predicting "9." only requires attending to "3" and "6". And the final answer
+token is nearly pure copy: the hard work was already serialized into the
+sequence, so the last prediction is a retrieval, not a computation. Each hop is
+shallow; the chain is deep.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Why "think step by step" isn't magic
+  words.</span> The phrase works because the training corpus is full of worked
+  solutions that start that way, and during training the model learned that
+  reasoning-shaped continuations tend to lead to correct answers. The prompt
+  raises the probability of entering that continuation mode; the attention
+  mechanics do the rest. Any phrasing that reliably elicits the scratchpad
+  behaves the same — the leverage is in the emitted tokens, not the incantation.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Two prompts, one model — and the real benchmark deltas">
+
+The problem in the widget is the actual Figure 1 example from Wei et al. 2022,
+and 27 is the actual wrong answer their model produced. Here are the two
+prompts side by side:
+
+```text
+── Prompt A (direct) ────────────────────────────────────────
+Q: The cafeteria had 23 apples. If they used 20 to make lunch
+   and bought 6 more, how many apples do they have?
+A:
+
+completion:  27                                            ✗
+
+── Prompt B (chain-of-thought) ──────────────────────────────
+Q: The cafeteria had 23 apples. If they used 20 to make lunch
+   and bought 6 more, how many apples do they have?
+A: Let's think step by step.
+
+completion:  They started with 23 apples. 23 − 20 = 3 left.
+             Then 3 + 6 = 9. The answer is 9.              ✓
+```
+
+The widget's toy trace makes the mechanism concrete with numbers you can
+check. At the answer position, the direct prompt produces a next-token
+distribution smeared across every partial computation — and you can measure
+that smear as entropy:
+
+```python
+import numpy as np
+
+# p(next token | prompt) at the answer position — toy trace from the widget
+direct = {"27": 0.30, "9": 0.24, "3": 0.14, "49": 0.11, "29": 0.11, "other": 0.10}
+cot    = {"9": 0.94, "3": 0.02, "other": 0.02, "27": 0.01, "29": 0.01}
+
+H = lambda d: -sum(p * np.log2(p) for p in d.values())
+H(direct)   # 2.45 bits — argmax is 27, which is wrong
+H(cot)      # 0.44 bits — p("9") = 0.94
+```
+
+Same question, same weights. With 25 scratchpad tokens in the context, the
+uncertainty at the answer position collapses from **2.45 bits to 0.44 bits**,
+because the answer already exists in the sequence and the final token only has
+to copy it. Here is where that final answer token's attention actually goes
+(the widget's toy trace — click the final `9` to see it live):
+
+| context token | comes from | attention weight |
+| --- | --- | --- |
+| `9.` | step 2's result | **0.41** |
+| `answer` | the framing "The answer is" | 0.10 |
+| `3` | step 1's result | 0.06 |
+| `=` | step 2's equation | 0.05 |
+| `A:` | the question's answer slot | 0.05 |
+| `apples` | the question | 0.04 |
+| everything else | diffuse | 0.29 |
+
+Read the top row again: the answer token **retrieves, it doesn't compute**.
+Over half of its focused attention lands on results the model itself wrote two
+and nine tokens earlier — tokens that would not exist under the direct prompt.
+
+The toy distribution is stylized; the benchmark effect is not. These are the
+published numbers, all with **zero weight changes** — the only intervention is
+the prompt:
+
+| benchmark | model | direct | chain-of-thought | variant |
+| --- | --- | --- | --- | --- |
+| GSM8K | PaLM 540B | 17.9% | **56.9%** | few-shot CoT, 8 worked exemplars (Wei et al. 2022) |
+| GSM8K | GPT-3 175B (text-davinci-002) | 10.4% | **40.7%** | zero-shot, just "Let's think step by step" (Kojima et al. 2022) |
+| MultiArith | GPT-3 175B (text-davinci-002) | 17.7% | **78.7%** | zero-shot, same single phrase (Kojima et al. 2022) |
+
+Two variants worth keeping straight, because they connect to the few-shot
+lesson: **few-shot CoT** puts worked reasoning chains inside the prompt as
+exemplars — the in-context examples teach the *format* of the scratchpad —
+while **zero-shot CoT** just appends the trigger phrase and lets the model
+improvise the format. Few-shot generally wins (56.9% vs 40.7% on GSM8K above,
+different models notwithstanding), which is exactly the zero-shot vs few-shot
+story: examples in context steer the output distribution harder than an
+instruction does. And because a sampled chain is stochastic, you can sample
+several chains at temperature > 0 and majority-vote the final answers —
+self-consistency decoding — which pushed PaLM 540B's GSM8K score to **74.4%**,
+from a 56.5% greedy-decoding CoT baseline (Wang et al. 2022). That trick only makes sense once you
+see each chain as one sampled path through the distribution the temperature
+lesson describes.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Wrong steps compound, tokens cost money, and CoT is not an agent">
+
+- **Only autoregressive models can do it.** The mechanism *is* sequential
+  generation: emit a token, append it, predict the next one conditioned on it.
+  A masked model like BERT predicts all its blanks in one parallel
+  bidirectional pass — nothing it predicts re-enters the context to condition
+  anything else, so there is no chain to build. This is the
+  autoregressive-vs-masked distinction doing real work.
+- **Confidently wrong steps compound.** The scratchpad anchors *whatever* is
+  in it. If step 1 emits "23 − 20 = 4", that 4 is now a trusted context token
+  and every later step attends to it as fact — the same copy mechanics that
+  make CoT work propagate the error to the final answer with high confidence.
+  Longer chains have more places to derail, and there is no backtracking
+  operator: the model cannot un-emit a token.
+- **The chain is not guaranteed to be the real computation.** The printed
+  reasoning is sampled text, not a trace of the circuit. Models can produce a
+  plausible-looking chain and an answer that was actually driven by something
+  else — e.g. a bias planted in the prompt — without the chain ever mentioning
+  it (Turpin et al. 2023, "unfaithful" CoT). Treat the chain as evidence, not
+  as an execution log.
+- **Reasoning tokens bill like any other tokens.** Every scratchpad token is
+  one more forward pass of latency and one more token of output cost, and the
+  chain occupies context-window budget that long inputs may need. A 25-token
+  scratchpad for a 1-token answer is a 26× output multiplier on that question
+  — fine for math, waste for lookups the model can do in one hop.
+- **Below a scale threshold it can hurt.** In Wei et al.'s scaling curves the
+  gains only emerge around the ~100B-parameter mark; smaller models produce
+  fluent chains with broken logic, and conditioning on a broken chain is worse
+  than answering directly.
+
+The misconception worth killing explicitly: **CoT is not an agentic loop.**
+Both look like "the model thinks before answering," but the dividing line is
+sharp — does anything *external* happen between tokens?
+
+| | chain-of-thought | agentic loop |
+| --- | --- | --- |
+| generation calls | **one** — a single autoregressive generation | **many** — a new call after each action |
+| between steps | nothing external; the next token is predicted immediately | an external system runs: tool call, database query, code execution |
+| new information | none — everything comes from the prompt and the weights | tool results enter the context as new tokens the model never generated |
+| failure containment | a wrong step stays and compounds | a wrong step can be caught by a failing tool call or checked result |
+
+In CoT the model is alone with its own outputs for the entire generation.
+The moment a tool result comes back and gets appended to the context, you have
+left CoT and built a loop — multiple generations with external state changes
+between them. Modern "reasoning models" sit in an interesting middle: they were
+RL-trained to emit long private chains by default, so the technique got baked
+in as a behavior — but the mechanism at inference is still exactly this, one
+autoregressive pass reading its own scratchpad.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Mechanically, why do intermediate reasoning tokens improve accuracy? 'The model gets to think more' is not an answer.">
+Because of two facts: activations don't persist across forward passes, and
+attention can only read tokens that exist in the context. A direct answer
+forces a multi-step computation through the activations of a single position —
+intermediate values have nowhere durable to live. Emitting a step turns its
+result into a real token with its own key/value vectors, so every later
+prediction can retrieve it with an ordinary attention lookup. One hard hop
+becomes a chain of easy hops, and the final answer token is usually just a
+copy of the last step's result. It also spends more compute — each scratchpad
+token is a full extra forward pass — but the compute is only useful because
+the results get serialized where attention can read them.
+</Drill>
+
+<Drill q="Is chain-of-thought a capability built into the architecture?">
+No. Nothing in the transformer implements "reasoning mode." CoT is a prompting
+technique that exploits two existing mechanics: autoregressive generation
+(emitted tokens re-enter the context) and attention (later tokens can read
+them). The prompt works because training data is full of worked solutions, so
+the model learned that reasoning-shaped continuations correlate with correct
+answers. The caveat for modern systems: reasoning models had this behavior
+reinforced into the weights with RL, so they emit chains unprompted — the
+eliciting trick got internalized, but the inference-time mechanism is
+unchanged.
+</Drill>
+
+<Drill q="Draw the exact line between chain-of-thought and an agentic loop.">
+External action between generations. CoT is a single autoregressive generation
+call: every token is predicted immediately from the prompt plus the model's
+own previous tokens, and no new information enters from outside. An agentic
+loop is multiple generation calls with an external system acting in between —
+a tool runs, a database answers, code executes — and the result comes back as
+context tokens the model didn't generate. "The model produced a lot of text
+before the answer" doesn't distinguish them; "did the context gain externally
+produced tokens mid-task" does.
+</Drill>
+
+<Drill q="Why can't a masked language model like BERT do chain-of-thought?">
+CoT requires each emitted token to become input for the next prediction —
+that's the scratchpad mechanism. A masked model fills in its [MASK] positions
+in one parallel bidirectional pass; its predictions land simultaneously and
+never feed back into the context to condition later predictions. No sequential
+emission, no accumulating scratchpad, no chain. Only an autoregressive decoder,
+which by construction appends every output to its input, can build context out
+of its own reasoning.
+</Drill>
+
+<Drill q="How does chain-of-thought interact with few-shot prompting and with sampling?">
+Few-shot CoT puts worked reasoning chains in the prompt as exemplars — the
+examples teach the scratchpad format and reliably trigger it (GSM8K PaLM 540B:
+17.9% direct → 56.9% few-shot CoT). Zero-shot CoT replaces the exemplars with
+a trigger phrase and does worse but still beats direct (10.4% → 40.7% on
+GSM8K for GPT-3). Sampling adds self-consistency: generate many chains at
+temperature > 0, take the majority final answer — different sampled paths make
+different mistakes, and voting cancels the uncorrelated ones (56.9% → 74.4%
+on GSM8K). All three compose because they act on the same object: the
+distribution over continuations.
+</Drill>
+
+<Drill q="A model's chain-of-thought reads perfectly but the answer is wrong — or the answer is right and the chain is nonsense. What's going on?">
+Two failure modes of the same fact: the chain is sampled text, not an
+execution trace. Case one, error compounding — one early step emitted a wrong
+value, and because emitted tokens are trusted context, every later step
+attended to it as fact; the chain looks locally coherent while carrying the
+error forward. Case two, unfaithfulness — the answer was driven by something
+the chain never mentions (a prompt bias, a memorized association), and the
+chain is post-hoc rationalization (Turpin et al. 2023). Both mean the same
+thing operationally: verify chains with an external check if you're going to
+rely on them, because the model can't audit its own scratchpad.
+</Drill>
+
+</Section>

@@ -189,7 +189,7 @@ export const TOPICS: Topic[] = [
     title: 'Chain-of-Thought',
     hook: 'The intermediate tokens aren’t decoration — each step becomes context that anchors the next, turning one hard hop into many easy ones.',
     category: 'advanced',
-    status: 'planned',
+    status: 'ready',
     viz: 'Direct vs step-by-step, side by side',
   },
   {
