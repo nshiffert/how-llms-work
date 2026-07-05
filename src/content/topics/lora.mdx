@@ -1,0 +1,259 @@
+---
+title: LoRA
+category: finetune
+hook: You don’t need to move all 768×768 weights — a rank-8 detour through B·A captures the update with ~2% of the parameters.
+crossLinks:
+  - qlora
+  - catastrophic-forgetting
+  - embeddings
+  - attention
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import LoraRankExplorer from '../../components/islands/LoraRankExplorer.tsx';
+
+<Section n={1} title="What LoRA is" tag="Fine-tune the update, not the weights">
+
+Full fine-tuning updates every parameter in the model. For a 7B model
+(LLaMA-7B is really 6.74B parameters) trained with Adam in mixed precision,
+that costs about **16 bytes per trainable parameter** — an fp32 master copy (4)
+plus two fp32 optimizer moments (8) plus the fp16 weight (2) and its gradient
+(2). That's 6.74B × 16 bytes ≈ **108 GB** before you've stored a single
+activation. And when you're done, every task variant you ship
+is a full 13.5 GB fp16 copy of the model. Ten customers, ten near-identical
+13.5 GB checkpoints that differ by a whisper.
+
+LoRA's bet is that the whisper is all you need to learn. Fine-tuning barely
+moves the weights — so instead of retraining a weight matrix $W$, freeze it and
+learn only the **change**.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> LoRA (Low-Rank
+  Adaptation) freezes a pretrained weight matrix <em>W</em> (d×d) and learns two
+  small matrices — <strong>B</strong> (d×r) and <strong>A</strong> (r×d), with
+  rank <em>r</em> ≪ d — so that their product approximates the fine-tuning
+  update: <strong>ΔW ≈ B·A</strong>. The effective weight at inference is
+  <strong>W + B·A</strong>. Only B and A are trained: 2·d·r parameters instead
+  of d². (W is square here to keep the arithmetic clean; for a d×k matrix the
+  count is r·(d+k).)
+</div>
+
+Get one thing straight before anything else, because it's the most common
+misreading: **a LoRA adapter is not a model.** It is an additive patch — a pair
+of thin matrices whose product gets added onto a specific frozen base model's
+weights. Alone, an adapter file is useless; applied to a different base (or
+even a different version of the same base), it's noise. The base does almost
+all of the work; the adapter nudges it.
+
+That additive structure buys three things at once. Checkpoints shrink from
+gigabytes to megabytes, so you can keep one base model in memory and swap
+adapters per task. Training memory collapses, because frozen parameters need no
+gradients and no optimizer state. And because the base weights literally cannot
+move, the model can't wander out of the basin where its pretrained abilities
+live — LoRA largely sidesteps **catastrophic forgetting** as a side effect.
+When even the frozen base is too big for your GPU, **QLoRA** quantizes it to
+4-bit and trains the same adapters on top.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Freeze W, route the update through a rank-r bottleneck">
+
+The forward pass of a LoRA-adapted layer is the base path plus a low-rank
+detour:
+
+$$
+h = Wx + \frac{\alpha}{r}\,B(Ax)
+$$
+
+$A$ projects the d-dimensional input down to $r$ dimensions; $B$ projects it
+back up to $d$. The parenthesization matters: you compute $Ax$ first (an
+r-vector), then $B(Ax)$ — the full d×d matrix $B\cdot A$ is never materialized
+during training. The scale factor $\alpha/r$ (α is a constant, typically 16 or
+32) keeps the detour's magnitude comparable as you change $r$.
+
+Initialization encodes the whole philosophy. $A$ starts as small random noise,
+but $B$ starts as **exactly zero** — so at step 0, $B\cdot A = 0$ and the
+adapted model is bit-for-bit the base model. Training starts from a working
+model and learns a deviation, rather than perturbing a working model with
+random noise and hoping to recover.
+
+Why does a rank-8 detour suffice for a 768- or 4096-dimensional layer? Because
+**fine-tuning updates are intrinsically low-rank**. Pretraining already built
+the features; fine-tuning mostly re-weights and re-combines them rather than
+learning a new basis. Measure the singular values of a real fine-tuning update
+ΔW and they fall off a cliff — a few directions carry almost all of the
+change. A rank-r product can represent any matrix whose rank is ≤ r, so if the
+true update is approximately rank-8, B·A with r=8 captures it almost exactly.
+The evidence is empirical and strong: the LoRA paper found that adapting
+GPT-3's attention matrices with **r=1** scores within a fraction of a point of
+**r=64** on its benchmarks, and earlier intrinsic-dimension work showed
+full-model fine-tuning succeeds inside random subspaces of only a few hundred
+dimensions.
+
+Drag the rank slider and watch both halves of the trade at once — the
+parameter bill (top) and the share of a realistic update you capture (bottom):
+
+<VizFrame
+  label="W + B·A — the rank-r detour, to scale"
+  caption="Drag r and watch B and A thicken next to the frozen 768×768 W while the trainable-parameter counter tracks 2·768·r. The curve below shows why small r is enough: a fast-decaying update is mostly captured by rank 8, while a flat random matrix would need rank ~665. Hit “merge for inference” to fold B·A into W — the deployed matrix has the same shape as the base, so the adapter adds zero latency."
+>
+  <LoraRankExplorer client:visible />
+</VizFrame>
+
+Any linear layer is eligible for a detour — the classic recipe from the LoRA
+paper adapts the attention query and value projections ($W_q$, $W_v$), but the
+MLP matrices and even the **embedding** table are just weight matrices too.
+At deploy time you either keep the detour separate (swap adapters per request,
+tiny extra matmul) or fold it in once — $W' = W + \frac{\alpha}{r}BA$ — and
+serve a graph identical to the base model.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="768×768 layer, r = 8 — count every parameter">
+
+Take one 768×768 weight matrix — a GPT-2-sized attention projection. Full
+fine-tuning trains all $768^2 = 589{,}824$ of its parameters. LoRA with r=8
+trains $B$ (768×8 = 6,144) plus $A$ (8×768 = 6,144): **12,288 parameters —
+2.08% of the matrix, 48× fewer.** The whole trade-off is the formula
+$2dr$ vs $d^2$:
+
+| rank r | trainable (B + A = 2·768·r) | share of W's 589,824 | reduction |
+| --- | --- | --- | --- |
+| 1 | 1,536 | 0.26% | 384× |
+| 4 | 6,144 | 1.04% | 96× |
+| **8** | **12,288** | **2.08%** | **48×** |
+| 16 | 24,576 | 4.17% | 24× |
+| 64 | 98,304 | 16.7% | 6× |
+| 384 | 589,824 | 100% | 1× — break-even |
+
+```python
+import torch
+
+d, r, alpha = 768, 8, 16
+W = torch.randn(d, d)               # frozen — requires_grad stays False
+A = torch.randn(r, d) * 0.01        # trainable, small random init
+B = torch.zeros(d, r)               # trainable, ZERO init -> B @ A = 0 at step 0
+
+def lora_forward(x):                # x: (batch, d)
+    return x @ W.T + (alpha / r) * (x @ A.T) @ B.T   # base path + detour
+
+W.numel()                           # 589_824 frozen
+B.numel() + A.numel()               # 12_288 trainable  -> 48x fewer, 2.08%
+
+# deploy: fold the detour in once — the served graph matches the base model
+W_eff = W + (alpha / r) * (B @ A)   # shape (768, 768), same as W
+```
+
+Now scale it to a real model. LLaMA-7B has $d = 4096$ and 32 layers; the
+classic recipe puts r=8 adapters on $W_q$ and $W_v$ in every layer:
+
+- per matrix: $2 \cdot 4096 \cdot 8 = 65{,}536$ params → two matrices per layer = 131,072
+- × 32 layers = **4,194,304 trainable parameters — 0.06% of the 6.74B base**
+- optimizer + gradient memory at ~16 bytes/param: **~67 MB**, vs ~108 GB for
+  full fine-tuning (the frozen fp16 base still occupies 13.5 GB — that part is
+  QLoRA's job)
+- the adapter checkpoint at fp16 is **8.4 MB**, vs 13.5 GB for a full copy —
+  1,600× smaller, small enough to keep hundreds of task adapters on one disk
+  and hot-swap them over a single base
+
+At GPT-3 scale the paper's numbers are the same story, louder: adapting 175B
+parameters with r=4 on $W_q, W_v$ cuts trainable parameters roughly
+**10,000×** and shrinks the per-task checkpoint from **350 GB to 35 MB**.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="High rank, big shifts, stacked adapters">
+
+- **High rank defeats the purpose.** Parameters grow linearly in r ($2dr$), and
+  at $r = d/2$ (384 for a 768-wide layer) B·A holds exactly as many parameters
+  as W itself — past that, *more*. Meanwhile the coverage curve flattened long
+  ago: the symptom is an r=256 run that trains slower, overfits sooner, and
+  scores no better than r=16. The sweet spot in practice is r = 4–16.
+- **A rank-r detour can't represent a high-rank change.** LoRA constrains the
+  update to an r-dimensional subspace per matrix. Adapting style, format,
+  domain vocabulary — fine, those updates really are low-rank. Teaching a
+  mostly-English base a new language or a new modality is not a whisper-sized
+  change; for genuinely large domain shifts, full fine-tuning still wins.
+- **Stacked adapters interfere.** Merging two independently trained adapters
+  gives $W + B_1A_1 + B_2A_2$ — a weight configuration neither training run
+  ever saw. Sometimes it works; often a chat adapter plus a code adapter makes
+  the model worse at both. Composition needs care (scaling the adapters down,
+  or training them jointly), not blind addition.
+- **It saves training, not inference.** The frozen base still has to be fully
+  loaded to serve; latency is identical (that's the merge trick's virtue, not a
+  discount) and so is inference memory. If your problem is *fitting* the base
+  model at all, LoRA alone doesn't help — that's why QLoRA exists.
+- **Adapters are welded to one base checkpoint.** B·A approximates the update
+  *relative to the exact W it was trained against*. Upgrade the base model and
+  every adapter in your fleet silently becomes an approximation of the wrong
+  delta — re-validate or re-train on every base bump.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Is a LoRA adapter a standalone model? What actually gets shipped and loaded?">
+No — it's an additive modification to a frozen base: two thin matrices per
+adapted layer whose product B·A is added to W at inference (W + B·A). What
+ships is only B and A — megabytes, not gigabytes (8.4 MB vs 13.5 GB for a
+LLaMA-7B recipe). It's meaningless without the exact base checkpoint it was
+trained against: serving loads the full base model once, then applies (or
+merges) the adapter. Change the base version and the adapter is a delta
+against weights that no longer exist.
+</Drill>
+
+<Drill q="Why does a rank-8 update work on a 4096-dimensional layer at all?">
+Because fine-tuning updates are intrinsically low-rank. Pretraining already
+learned the feature directions; fine-tuning mostly re-weights and re-mixes
+them, so the true update ΔW has singular values that decay fast — a few
+directions carry nearly all the change, and a rank-8 product captures them.
+Empirical support: the LoRA paper's r=1 adaptation of GPT-3's attention
+matrices lands within a fraction of a point of r=64, and intrinsic-dimension
+experiments showed full fine-tuning succeeds inside random subspaces of a few
+hundred dimensions. If updates were full-rank (flat spectrum), rank 8 would
+capture only 8/4096 of the change and LoRA wouldn't work.
+</Drill>
+
+<Drill q="Compute it: LoRA r=8 on a 768×768 matrix — how many trainable parameters, and how many fewer than full fine-tuning?">
+B is 768×8 = 6,144 and A is 8×768 = 6,144, so 2·d·r = 12,288 trainable
+parameters, against d² = 589,824 for the full matrix: 2.08% of the
+parameters, a 48× reduction. The general formula is 2dr vs d² — the reduction
+factor is d/2r, which is why it's 48× here and why it hits 1× (break-even) at
+r = d/2 = 384.
+</Drill>
+
+<Drill q="Why is B initialized to zero but A initialized randomly — why not both zero, or both random?">
+B = 0 makes B·A = 0 at step 0, so the adapted model starts exactly as the base
+model — you fine-tune a working model instead of a randomly perturbed one.
+Both random would inject noise into every adapted layer before the first
+gradient step. Both zero would never train: the gradient of A is Bᵀ·(∂L/∂h)·xᵀ,
+which is zero while B is zero, and symmetrically B's gradient needs A·x ≠ 0.
+With A random and B zero, B gets a nonzero gradient immediately, and A starts
+learning as soon as B moves off zero.
+</Drill>
+
+<Drill q="When do you pick LoRA over full fine-tuning, and when the reverse?">
+LoRA: cheap iteration on limited hardware (67 MB of optimizer state vs ~108 GB
+for a 7B model), many task variants over one shared base (megabyte adapters,
+hot-swappable), and when preserving base behavior matters — frozen weights
+can't drift, so catastrophic forgetting mostly disappears. Full fine-tuning:
+genuinely large domain shifts (new language, new modality, continued
+pretraining) where the required update isn't low-rank, and when you have the
+compute and want the last fraction of quality. Rule of thumb: if the task is
+"steer what the model already knows," LoRA; if it's "teach it something it
+doesn't know at all," full.
+</Drill>
+
+<Drill q="What happens as you crank r toward the full dimension d?">
+Parameters grow as 2dr, so at r = d/2 the adapter matches W's parameter count
+and at r = d it holds 2× more — while B·A at r = d can represent any d×d
+matrix, so you've recovered full fine-tuning expressiveness with double the
+parameters and a worse parameterization (a product of two matrices instead of
+one). Quality-wise the returns vanished far earlier: the update's spectrum
+decays fast, so past r ≈ 16–64 extra rank mostly buys overfitting surface and
+optimizer cost. That's why the practical sweet spot stays at r = 4–16.
+</Drill>
+
+</Section>

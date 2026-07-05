@@ -105,7 +105,7 @@ export const TOPICS: Topic[] = [
     title: 'LoRA',
     hook: 'You don’t need to move all 768×768 weights — a rank-8 detour through B·A captures the update with ~2% of the parameters.',
     category: 'finetune',
-    status: 'planned',
+    status: 'ready',
     viz: 'W + B·A decomposition, rank slider',
   },
   {
