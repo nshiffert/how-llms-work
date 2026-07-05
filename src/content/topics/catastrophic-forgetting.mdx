@@ -1,0 +1,272 @@
+---
+title: Catastrophic Forgetting
+category: finetune
+hook: Chase task B’s minimum with full fine-tuning and the weights walk straight out of task A’s basin.
+crossLinks:
+  - lora
+  - embeddings
+  - cross-entropy
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import ForgettingLandscape from '../../components/islands/ForgettingLandscape.tsx';
+
+<Section n={1} title="What catastrophic forgetting is" tag="Fine-tuning on task B can erase task A — by design, not by accident">
+
+You fine-tune a general model on medical question answering. The task loss
+falls beautifully, the medical eval comes back great — and then someone asks
+the deployed model to draft an email and it responds like a discharge summary.
+Its general competence didn't degrade gracefully; whole capabilities fell off
+a cliff. That cliff has had a name since
+McCloskey & Cohen documented it in neural networks in 1989: **catastrophic
+forgetting** (originally "catastrophic interference").
+
+The cause is not a bug. Fine-tuning is gradient descent on a new loss surface —
+usually plain **cross-entropy** on the new data. The optimizer's entire job is
+to move the weights wherever that one loss decreases. It does not know, and
+cannot know, that the current weight values also encode "how to write English,"
+"what a polite email sounds like," and "Paris is in France." Those capabilities
+live in the *same* shared parameters it is about to update. Every step toward
+the new task's minimum is free to be a step away from the configuration that
+stored the old knowledge.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> Catastrophic
+  forgetting is the loss of previously learned capabilities when a network is
+  trained on a new objective. Gradient descent on the new loss updates the
+  shared weights with <em>no term that protects old knowledge</em> — weights
+  good for "general language modeling" get displaced by weights good for
+  "medical QA," and the displacement can be severe enough to destroy the
+  general skill.
+</div>
+
+The key mental shift: the optimizer is not misbehaving. It is doing exactly
+what you asked — minimizing the only loss you handed it. Forgetting is what
+"success" on that narrow objective looks like from every other task's point of
+view. Which also tells you the shape of every fix in advance: they all change
+what the optimizer is allowed to do, not how big the model is.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Two loss surfaces, one set of weights — descend one and you climb the other">
+
+Picture the weights as a point in parameter space. Pretraining left that point
+at (or near) a minimum of the pretraining loss — call it **task A's basin**.
+Fine-tuning defines a second surface over the *same* space — **task B's** —
+whose minimum is somewhere else. The gradient the optimizer follows is computed
+only from task B's surface. If the two minima don't coincide, descending B
+means climbing A. How much you forget is, to first order, a function of one
+thing: **how far the weights walk**.
+
+<VizFrame
+  label="Two-task loss landscape"
+  caption="The weights start at task A's minimum (blue bowl). Press Play under each regime and watch both losses. Full fine-tune: the walk goes straight to task B's minimum — task A's loss passes 9.4 by step 10 and hits the worst-case 10 by the end of the run. Replay: mixing old data changes the surface being descended, so the walk stops at a compromise between the bowls. LoRA-style leash: the adapter can only move the function a little — then hit 'unplug adapter' and notice task A comes back exactly, because the base weights underneath never moved."
+>
+  <ForgettingLandscape client:visible />
+</VizFrame>
+
+Every real mitigation is a variation on one move — **keep the weights near the
+pretrained point while still descending the new loss**:
+
+- **LoRA / parameter-efficient fine-tuning** — freeze the base weights entirely
+  and route the update through a small low-rank detour. The base *cannot* move,
+  the detour is small, and it's removable: subtract the adapter and the
+  pretrained model is back, bit for bit. Empirically LoRA both learns less and
+  forgets less than full fine-tuning (Biderman et al., 2024) — the leash binds
+  in both directions.
+- **Replay (rehearsal)** — mix original-distribution data into the fine-tuning
+  batches. This doesn't constrain the optimizer; it changes the surface, so the
+  blend's minimum sits between the two tasks. This is the fix used at
+  production scale: InstructGPT's RLHF caused regressions on public NLP
+  benchmarks (the "alignment tax"), and mixing pretraining gradients back in
+  (PPO-ptx) was the repair — replay, in the wild.
+- **Elastic weight consolidation (EWC)** — add a quadratic penalty on moving
+  each weight, scaled by how important that weight was to the old task
+  (importance estimated by the Fisher information; Kirkpatrick et al., 2017).
+  A per-weight leash: stiff where old knowledge lives, slack elsewhere.
+- **Small learning rate + early stopping** — the crudest leash: take small
+  steps and stop soon, so the walk simply never gets far. It's implicit
+  regularization toward the initialization, and it's why most fine-tuning
+  recipes use learning rates one to two orders of magnitude smaller than
+  pretraining.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">The misconception to kill: "use a bigger
+  model."</span> Capacity is not the problem — a 70B model's weights walk out
+  of the pretraining basin under unconstrained updates exactly the way a 7B's
+  do. There is spare capacity to store both tasks, but gradient descent on the
+  new loss alone has <em>no incentive to use it</em>: it takes the steepest
+  path to task B, straight through the weights encoding task A. The problem is
+  unconstrained updates, and every fix above constrains them.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Two quadratic bowls, ten SGD steps, watch task A die">
+
+Strip the problem to two parameters so nothing can hide. Task A's loss is a
+bowl centered at $a = (0, 0)$; task B's is an identical bowl at $b = (4, 2)$:
+
+$$
+L_A(w) = \tfrac{1}{2}\lVert w - a \rVert^2
+\qquad
+L_B(w) = \tfrac{1}{2}\lVert w - b \rVert^2
+$$
+
+The model starts fully pretrained — $w = (0,0)$, task-A loss exactly 0, task-B
+loss $\tfrac{1}{2}(4^2 + 2^2) = 10$. Fine-tune with plain gradient descent on
+$L_B$ only, learning rate $\eta = 0.3$, so each step is
+$w \leftarrow w - 0.3\,(w - b)$ — it covers 30% of the remaining distance to
+$b$ every step:
+
+| step | $w$ | task-B loss | task-A loss |
+| --- | --- | --- | --- |
+| 0 | (0.00, 0.00) | 10.000 | **0.000** |
+| 1 | (1.20, 0.60) | 4.900 | 0.900 |
+| 2 | (2.04, 1.02) | 2.401 | 2.601 |
+| 3 | (2.63, 1.31) | 1.176 | 4.316 |
+| 4 | (3.04, 1.52) | 0.576 | 5.774 |
+| 5 | (3.33, 1.66) | 0.282 | 6.921 |
+| 10 | (3.89, 1.94) | 0.008 | **9.443** |
+
+Ten steps. The fine-tune is a total success — task-B loss fell from 10 to
+0.008 — and task-A loss climbed from 0 to 9.443, which is 94% of the way to
+the worst case of 10 (the loss a *never-pretrained* model at $b$ would have).
+Both curves are the same geometric decay read in opposite directions:
+$L_B(t) = 10 \cdot 0.49^t$ falls exactly as $L_A(t) = 10\,(1 - 0.7^t)^2$
+rises. Nothing dramatic happened. Gradient descent worked perfectly.
+
+```python
+import numpy as np
+
+a, b = np.array([0.0, 0.0]), np.array([4.0, 2.0])   # task-A / task-B minima
+L = lambda w, c: 0.5 * np.sum((w - c) ** 2)
+
+w, lr = a.copy(), 0.3                     # start at the pretrained weights
+for t in range(11):
+    print(f"step {t:2d}  w = ({w[0]:5.2f}, {w[1]:5.2f})   "
+          f"L_B = {L(w, b):6.3f}   L_A = {L(w, a):6.3f}")
+    w -= lr * (w - b)         # ∇L_B only — task A is invisible to the update
+```
+
+The fixes, in the same toy:
+
+- **Replay, 50/50.** Change one line —
+  `w -= lr * (0.5*(w - b) + 0.5*(w - a))` — and the walk converges to the
+  midpoint $(2, 1)$, where both losses are **2.5**. Neither task is perfect;
+  neither is destroyed. The mix ratio *is* the knob that slides the endpoint
+  between the two minima.
+- **LoRA-style leash.** Freeze the base at $(0,0)$, train an adapter $\Delta$
+  on $L_B$ with its size capped at $\lVert\Delta\rVert \le 1.5$. The walk
+  stops at $(1.34, 0.67)$: task-A loss held at **1.13** while task-B loss
+  improved 10 → **4.42**. And because the base never moved, deleting the
+  adapter restores task-A loss 0.000 exactly — full fine-tuning has no undo
+  button, because it overwrote the weights in place.
+
+One honest caveat, because the toy exaggerates one thing: with two rigid bowls
+you *cannot* have both losses near zero — the tasks genuinely conflict at this
+scale. A billion-parameter network is wildly overparameterized, so task B has
+enormous families of low-loss solutions, and some sit close to the pretrained
+weights. That's why leashed methods in practice give up only a little task-B
+quality, not the chunk this cartoon shows. What transfers exactly: the
+optimizer descends only the loss you hand it, and distance walked is the price
+old tasks pay.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="The failure is invisible on your fine-tune eval — that's what makes it dangerous">
+
+- **General competence collapses outside the fine-tune domain.** The medical
+  fine-tune aces MedQA and loses summarization, casual conversation, coding.
+  Symptom in prod: "the model got worse at everything we didn't train it on" —
+  filed weeks after launch, because nobody evaluated anything else.
+- **Format bleeding.** Fine-tune on JSON extraction and the model starts
+  answering *casual questions* in JSON. The narrow task's output distribution
+  leaks over the entire input space, because the weights that decided
+  "what register do I answer in" were repurposed.
+- **Out-of-distribution prompts fall off a cliff.** Inputs that look nothing
+  like the fine-tuning data land in regions of behavior the update never
+  controlled but still disturbed — performance there isn't just lower, it's
+  erratic.
+- **Reasoning and knowledge benchmarks quietly regress.** Narrow fine-tunes
+  routinely shave points off MMLU-style general suites. This is the "alignment
+  tax" InstructGPT measured after RLHF — real enough that OpenAI shipped the
+  replay fix (PPO-ptx) in the same paper.
+- **Embedding geometry shifts under downstream systems.** Fine-tuning moves the
+  embedding space itself, so similarity structure the base model had — the
+  geometry your retrieval or clustering pipeline was built against — silently
+  deforms. Nothing errors; rankings just get worse.
+- **Your eval can't see any of this.** The fine-tune eval measures task B by
+  construction. Forgetting lives in its complement. If you don't run a held-out
+  *general* suite against the base model as a control, the first detector of
+  catastrophic forgetting is your users.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Why does the optimizer overwrite weights that encode useful knowledge? Isn't that a bug?">
+No — it's the objective. The fine-tuning gradient is computed from the new
+task's loss (typically cross-entropy on the new data) and nothing else. The
+weights that store old capabilities are the same shared parameters being
+updated, and the loss has no term that references them, so there is no
+gradient pressure to preserve them. The optimizer takes the steepest path to
+the new minimum; if that path leaves the pretraining basin, it leaves.
+Forgetting is gradient descent succeeding at exactly what you asked.
+</Drill>
+
+<Drill q="Would a bigger model fix catastrophic forgetting?">
+No. Capacity isn't the binding constraint — a 70B model has plenty of room to
+store both tasks, but gradient descent on the new loss alone has no incentive
+to route around the old knowledge. Unconstrained updates displace it in a big
+model just as in a small one. The fix is always some constraint on the update
+— freeze weights (LoRA), penalize movement (EWC), blend objectives (replay) —
+not more parameters.
+</Drill>
+
+<Drill q="Mechanically, how does LoRA prevent forgetting?">
+Three ways at once. The base weights are frozen, so the configuration that
+encodes pretrained knowledge literally cannot move. The update is a low-rank,
+α/r-scaled detour, so the function can only shift a limited amount. And the
+change is additive and removable — subtract B·A and the base model is back
+bit-for-bit, an undo button full fine-tuning doesn't have because it
+overwrites weights in place. Empirically (Biderman et al., 2024) LoRA learns
+less on the target task and forgets less off it — the leash binds both ways.
+</Drill>
+
+<Drill q="Compare EWC and replay. When would you pick each?">
+Replay mixes original-distribution data into fine-tuning batches, changing the
+surface being descended so its minimum is a compromise between tasks. It's the
+simplest, strongest option when you have the old data — it's how InstructGPT
+paid down the alignment tax (PPO-ptx). EWC keeps no old data at train time:
+it adds a per-weight quadratic penalty against moving, scaled by the Fisher
+information — an estimate of how much the old loss cares about each weight.
+Pick replay when the pretraining-like data is available; pick EWC when you
+can't ship old data through training (privacy, licensing) — the Fisher is
+estimated once, offline, on an old-task sample before fine-tuning starts.
+</Drill>
+
+<Drill q="Why do a small learning rate and early stopping reduce forgetting?">
+Because forgetting scales with distance walked in weight space. Small steps
+plus stopping early keep the weights close to the pretrained point — an
+implicit leash, the same mechanism as LoRA's frozen base or EWC's penalty, just
+enforced by never getting far rather than by being pulled back. It's why
+fine-tuning learning rates are typically one to two orders of magnitude smaller
+than pretraining rates: 1e-5-to-1e-4-scale instead of the 1e-4-to-1e-3-scale
+used in pretraining.
+</Drill>
+
+<Drill q="Your fine-tuned model aces its eval but users say it got worse. What happened, and how do you catch it before launch?">
+Classic catastrophic forgetting: the eval measures task B, and the damage is
+everywhere else — the eval is blind to it by construction. Catch it with a
+control experiment: run a held-out general suite (reasoning, formatting,
+knowledge, a slice of pretraining-like data) on both the base and fine-tuned
+model, and diff. Any regression vs the base is the forgetting bill. Then
+mitigate: add replay data, lower the learning rate, or switch to LoRA and
+re-measure — and keep the general suite in CI so the next fine-tune can't
+regress silently either.
+</Drill>
+
+</Section>

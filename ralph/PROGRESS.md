@@ -29,7 +29,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 11 | autoregressive-vs-masked | generation | done   | [outline](outlines/autoregressive-vs-masked.md) | 9616714 |
 | 12 | lora                     | finetune   | done   | [outline](outlines/lora.md)               | d5cfce6 |
 | 13 | qlora                    | finetune   | done   | [outline](outlines/qlora.md)              | a1a1c5b |
-| 14 | catastrophic-forgetting  | finetune   | todo   | [outline](outlines/catastrophic-forgetting.md) |   |
+| 14 | catastrophic-forgetting  | finetune   | done   | [outline](outlines/catastrophic-forgetting.md) |   |
 | 15 | distillation             | finetune   | todo   | [outline](outlines/distillation.md)       |        |
 | 16 | vocabulary-handling      | finetune   | todo   | [outline](outlines/vocabulary-handling.md)|        |
 | 17 | rag                      | advanced   | todo   | [outline](outlines/rag.md)                |        |

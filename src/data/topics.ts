@@ -121,7 +121,7 @@ export const TOPICS: Topic[] = [
     title: 'Catastrophic Forgetting',
     hook: 'Chase task B’s minimum with full fine-tuning and the weights walk straight out of task A’s basin.',
     category: 'finetune',
-    status: 'planned',
+    status: 'ready',
     viz: '2D loss-landscape drift animation',
   },
   {
