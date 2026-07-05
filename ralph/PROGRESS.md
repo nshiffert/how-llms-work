@@ -28,7 +28,7 @@ iteration and to `done` (with the commit short-sha) at the end. Never touch othe
 | 10 | top-k-top-p              | generation | done   | [outline](outlines/top-k-top-p.md)        | bb54125 |
 | 11 | autoregressive-vs-masked | generation | done   | [outline](outlines/autoregressive-vs-masked.md) | 9616714 |
 | 12 | lora                     | finetune   | done   | [outline](outlines/lora.md)               | d5cfce6 |
-| 13 | qlora                    | finetune   | todo   | [outline](outlines/qlora.md)              |        |
+| 13 | qlora                    | finetune   | done   | [outline](outlines/qlora.md)              |        |
 | 14 | catastrophic-forgetting  | finetune   | todo   | [outline](outlines/catastrophic-forgetting.md) |   |
 | 15 | distillation             | finetune   | todo   | [outline](outlines/distillation.md)       |        |
 | 16 | vocabulary-handling      | finetune   | todo   | [outline](outlines/vocabulary-handling.md)|        |

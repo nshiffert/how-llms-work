@@ -113,7 +113,7 @@ export const TOPICS: Topic[] = [
     title: 'QLoRA',
     hook: 'Quantize the frozen base to 4-bit, keep the tiny adapters in full precision — fine-tune a 65B model on one GPU.',
     category: 'finetune',
-    status: 'planned',
+    status: 'ready',
     viz: 'fp32→int4 rounding + memory bars',
   },
   {

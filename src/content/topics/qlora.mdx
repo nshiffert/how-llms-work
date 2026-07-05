@@ -1,0 +1,280 @@
+---
+title: QLoRA
+category: finetune
+hook: Quantize the frozen base to 4-bit, keep the tiny adapters in full precision — fine-tune a 65B model on one GPU.
+crossLinks:
+  - lora
+  - distillation
+  - vanishing-gradients
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import QuantizationExplorer from '../../components/islands/QuantizationExplorer.tsx';
+
+<Section n={1} title="What QLoRA is" tag="The wall is memory, not compute">
+
+**LoRA** already collapsed the *training-state* bill: freeze the base, train
+megabytes of adapters, and the optimizer memory for a 7B model drops from
+~108 GB to ~67 MB. But LoRA leaves one line item untouched — the frozen base
+itself still has to sit in VRAM to run forward passes. At fp16 that's 13.5 GB
+for LLaMA-7B and **130 GB for a 65B model**. Your GPU has 16. The wall you hit
+isn't compute (the adapters are tiny to train); it's that the frozen bystander
+doesn't fit in the room. (LLaMA-7B is really 6.74B params, hence 13.5 GB; the
+tables below use a round 7B, hence 14 GB. Same quantity, one rounding choice —
+flagged once, here.)
+
+QLoRA's move: if the base is frozen anyway — never updated, only read — stop
+storing it in a precision meant for training. Compress it.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> QLoRA is LoRA on top
+  of a base model <strong>quantized to 4-bit</strong>: every frozen weight is
+  stored as one of 16 values (0.5 bytes instead of 2–4), while the LoRA
+  adapters — the only thing being trained — stay in full precision (bf16).
+  Forward passes dequantize the base on the fly; gradients flow through it
+  into the adapters, and the 4-bit weights themselves never change.
+</div>
+
+Kill the most common misreading first: **QLoRA is not "LoRA for specialized
+domains."** Nothing about it is domain-specific. It is a *resource* technique —
+the answer to "the base model doesn't fit in my VRAM at trainable precision,"
+full stop. You reach for it because of your hardware budget, not your task. If
+the fp16 base already fits with room to train, plain LoRA gives you the same
+adapters without the quantization error you're about to meet.
+
+The headline result from the QLoRA paper (Dettmers et al., 2023): full 16-bit
+fine-tuning of a 65B model needs **over 780 GB** of GPU memory — a multi-node
+cluster. QLoRA fine-tunes the same 65B model on **a single 48 GB GPU**, and
+its Guanaco-65B, trained in 24 hours on one card, scored 99.3% of ChatGPT's
+level on the Vicuna benchmark. If instead of adapting a big model you want a
+genuinely *smaller* one to serve, that's a different tool — **distillation**.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Round the frozen base to 16 levels; train in bf16 on top">
+
+Quantization here is just controlled rounding. Take a block of weights, find
+its largest absolute value (the **absmax**), divide it into a grid, and store
+each weight as the index of its nearest grid point — a 4-bit integer — plus
+one shared scale factor per block:
+
+$$
+\text{scale} = \frac{\text{absmax}}{7}, \qquad
+q = \mathrm{round}\!\left(\frac{w}{\text{scale}}\right), \qquad
+\hat{w} = q \cdot \text{scale}
+$$
+
+The stored $q$ needs only 4 bits because it only takes 16 values (strictly,
+this symmetric grid uses 15 of the 16 codes — $q \in \{-7 \dots 7\}$; NF4,
+below, spends all 16). The reconstruction $\hat{w}$ is *not* $w$ — the gap $w - \hat{w}$ is
+**quantization error**, at worst half a grid step. That error is the entire
+price of QLoRA, so the design questions are all about shrinking it:
+
+- **Small blocks (64 weights each), one scale per block.** One outlier weight
+  inflates the scale and wrecks the resolution — of its own 64 neighbors
+  only, not the whole tensor. The scales add 32 bits per 64 weights (0.5
+  extra bits/param); **double quantization** quantizes the scales themselves
+  to 8-bit, cutting the overhead to ~0.127 bits/param — about 3 GB saved on a
+  65B model.
+- **NF4 instead of a uniform grid.** Trained weights are approximately
+  normally distributed — bunched near zero, sparse in the tails. A uniform
+  16-level grid wastes levels out where almost no weights live. NF4
+  (4-bit NormalFloat) places the 16 levels at *quantiles of a normal
+  distribution*: dense near zero where the mass is. Same 4 bits, ~30% lower
+  average error on normal weights.
+- **Compute never happens in 4-bit.** Each layer's weights are dequantized to
+  bf16 just-in-time for the matmul, used, and dropped. The persistent copy —
+  what occupies your VRAM — is the 4-bit one.
+
+One more piece of the paper's method, orthogonal to rounding: **paged
+optimizers**. Even with a 4-bit base, gradient-checkpointing peaks can spike
+memory past the card's limit mid-step; QLoRA allocates the optimizer state in
+unified memory so it pages out to CPU RAM during the spike and back after —
+an OOM crash becomes a slow step. If an interviewer asks what the QLoRA paper
+actually introduced, the trio is: NF4, double quantization, paged optimizers.
+
+The forward pass is LoRA's with one substitution — the base path reads
+reconstructed weights:
+
+$$
+h = \hat{W}x + \frac{\alpha}{r}\,B(Ax), \qquad \hat{W} = \mathrm{dequant}(W_{\text{4bit}})
+$$
+
+Why do $B$ and $A$ stay in bf16? Because **you cannot train a 4-bit weight**.
+A gradient step moves a weight by something like $10^{-4}$; the gap between
+int4 levels in a typical block is ~$10^{-2}$. Re-quantize after the update and
+the weight rounds straight back to the level it started on — the update
+vanishes below the resolution of the format, the same way gradients vanish
+below fp16's floor in **vanishing gradients**. (Rounding is also a staircase
+function: zero gradient almost everywhere, so you couldn't backprop through
+it honestly anyway.) All learning must happen in a format fine enough to
+accumulate whispers — hence full-precision adapters on a compressed,
+genuinely frozen base.
+
+<VizFrame
+  label="fp32 → int4 — rounding a weight onto 16 levels"
+  caption="Drag the weight and watch it snap to the nearest storable level — the amber gap is quantization error. Then switch formats: int8's 256 levels make the error histogram collapse toward zero but the 7B base costs 7 GB; int4's 16 levels spread the errors ~18× wider but drop the base to 3.5 GB, under the 16 GB GPU line with room to train. NF4 keeps the same 16 levels but crowds them near zero where weights actually live — mean error falls ~30%, paid for with sparser levels in the tails."
+>
+  <QuantizationExplorer client:visible />
+</VizFrame>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="Quantize a block by hand, then price out a 7B fine-tune">
+
+Take an 8-weight block (real blocks are 64; eight fits on a page). absmax is
+0.55, so scale = 0.55/7 = **0.0786**:
+
+| w (fp32) | w/scale | q (int4) | ŵ = q·scale | error w − ŵ |
+| --- | --- | --- | --- | --- |
+| 0.42 | 5.35 | 5 | 0.393 | +0.027 |
+| −0.31 | −3.95 | −4 | −0.314 | +0.004 |
+| 0.07 | 0.89 | 1 | 0.079 | −0.009 |
+| −0.18 | −2.29 | −2 | −0.157 | −0.023 |
+| 0.55 | 7.00 | 7 | 0.550 | 0.000 |
+| −0.44 | −5.60 | −6 | −0.471 | +0.031 |
+| 0.12 | 1.53 | 2 | 0.157 | −0.037 |
+| −0.09 | −1.15 | −1 | −0.079 | −0.011 |
+
+Mean |error| = **0.018**, and no error can exceed scale/2 = 0.039. Eight
+fp32 weights were 32 bytes; now they're 8 half-byte integers + one shared
+scale. The same trace as code, plus the outlier failure you should expect:
+
+```python
+import torch
+
+def quantize_int4(w):                      # absmax quantizer, one block
+    scale = w.abs().max() / 7              # 16 levels: q ∈ {-8..7}, we use ±7
+    q = torch.clamp(torch.round(w / scale), -8, 7).to(torch.int8)
+    return q, scale                        # ship 4-bit ints + one scale
+
+def dequantize(q, scale):
+    return q.float() * scale               # what the forward pass sees
+
+w = torch.tensor([0.42, -0.31, 0.07, -0.18, 0.55, -0.44, 0.12, -0.09])
+q, scale = quantize_int4(w)                # scale = 0.0786
+(w - dequantize(q, scale)).abs().mean()    # 0.018   (max possible: scale/2 = 0.039)
+
+w[4] = 2.5                                 # one outlier joins the block
+q, scale = quantize_int4(w)                # scale = 0.357 — 4.5× coarser
+(w - dequantize(q, scale)).abs().mean()    # 0.081 — 4.5× the error for everyone
+```
+
+One outlier stretched the grid 4.5× and every neighbor's error grew with it —
+this is exactly why QLoRA quantizes in blocks of 64 with a private scale each,
+and why NF4 spends its 16 levels where the weights cluster.
+
+Now the memory bill, at bytes per parameter — **fp32 = 4, fp16 = 2, int8 = 1,
+int4 = 0.5** (8× smaller than fp32):
+
+| format | bytes/param | 7B base | 65B base |
+| --- | --- | --- | --- |
+| fp32 | 4 | 28 GB | 260 GB |
+| fp16 | 2 | 14 GB | 130 GB |
+| int8 | 1 | 7 GB | 65 GB |
+| **int4 / NF4** | **0.5** | **3.5 GB** | **32.5 GB** |
+
+A 7B model goes from 28 GB in fp32 to **3.5 GB in int4** — and now the whole
+fine-tune fits a 16 GB consumer GPU: 3.5 GB frozen base + ~0.08 GB of adapters
+with their gradients and optimizer state (the r=8 recipe from the LoRA lesson:
+4.2M trainable params) + activations. The honest fine print: with fp32 scales
+per 64-weight block, "4-bit" is really 4.5 bits/param (0.56 bytes); double
+quantization brings it to ~4.13 bits. The table's 0.5 is the clean number, off
+by ~3%.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Error compounds, outliers steal resolution, merges get lossy">
+
+- **The base is genuinely less accurate.** Every one of ~7B weights carries up
+  to half a grid step of error, and 32 layers of matmuls compound the noise —
+  an int4 base is a slightly blurred copy of the fp16 model, before you've
+  trained anything. NF4 + small blocks shrink the blur; nothing removes it.
+- **Degradation is task-lopsided.** Fluency and style barely notice 4-bit;
+  **multi-step math reasoning degrades hardest**, because long deterministic
+  chains give small logit shifts 20 places to flip an intermediate token, and
+  one flipped step sinks the answer. Benchmark averages hide this — check the
+  task you care about, not the mean.
+- **One outlier taxes its whole block.** As in the worked example: absmax
+  scaling means a single large weight coarsens the grid for its 64 neighbors.
+  Real transformer weight matrices have outlier channels, which is why
+  per-tensor quantization (one scale for millions of weights) is unusable and
+  block-wise is non-negotiable.
+- **You pay in wall-clock what you saved in VRAM.** Every forward pass
+  dequantizes every layer, every step — QLoRA trains meaningfully slower than
+  LoRA on an fp16 base. If the fp16 base *fits*, plain LoRA is the better
+  deal; QLoRA is for when it doesn't.
+- **Merging the adapter is no longer clean.** LoRA's deploy trick — fold
+  $BA$ into $W$ — assumed both live in the same precision. Adding a bf16
+  update into 4-bit weights forces a re-quantization, layering fresh rounding
+  error on top of training. In practice you either serve the 4-bit base with
+  the adapter kept separate, or dequantize the whole base to 16-bit and merge
+  — giving back the memory savings at serving time.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="What exactly does QLoRA quantize, and what stays in full precision?">
+Quantized: the frozen base model's weights — every pretrained matrix stored in
+4-bit (NF4), 0.5 bytes/param, never updated. Full precision (bf16): the LoRA
+adapter matrices B and A, their gradients, and their optimizer state — the
+only trainable parameters. Compute is also full precision: each layer is
+dequantized to bf16 just-in-time for its matmul. So the persistent memory is
+4-bit; the arithmetic and the learning never are.
+</Drill>
+
+<Drill q="Why does QLoRA enable single-GPU fine-tuning of models that LoRA alone can't touch?">
+LoRA removed the optimizer/gradient bill but still keeps the full fp16 base in
+VRAM — 130 GB for a 65B model, far beyond the 80 GB A100s of the paper's era,
+and even a card that holds it has no headroom left to train. QLoRA compresses that frozen bystander 4×: 65B drops to 32.5 GB,
+which fits a single 48 GB GPU with room for adapters and activations. The
+paper's comparison: full 16-bit fine-tuning of 65B needs >780 GB; QLoRA does
+it on one card. The insight is that frozen weights are read-only, so they
+don't need a training-grade storage format.
+</Drill>
+
+<Drill q="Compute it: what does a 7B base model cost in VRAM at int4, and what's the full QLoRA training footprint?">
+Bytes/param: fp32 = 4, fp16 = 2, int8 = 1, int4 = 0.5. So 7B × 0.5 B =
+3.5 GB — versus 28 GB at fp32 and 14 GB at fp16. Training footprint: 3.5 GB
+frozen base + ~0.08 GB for r=8 adapters with gradients and Adam state (4.2M
+trainable params) + activations — comfortably inside a 16 GB consumer GPU.
+Honest asterisk: block scales make real NF4 ≈ 4.5 bits/param, ~4.13 with
+double quantization, so add ~3%.
+</Drill>
+
+<Drill q="Is QLoRA for specialized domains or for resource limits? Defend the answer.">
+Resource limits — this is the classic misread. Nothing in QLoRA is about the
+task or domain: it changes how the frozen base is *stored*, not what the
+adapters can learn. The decision rule is purely hardware: fp16 base fits with
+training headroom → plain LoRA (no quantization error, faster steps); doesn't
+fit → QLoRA. Domain questions — how big a shift the adapter can express — are
+LoRA-rank questions and full-fine-tune-vs-LoRA questions, unchanged by
+quantizing the base.
+</Drill>
+
+<Drill q="What's the accuracy cost of running the base in 4-bit, and where does it bite hardest?">
+Every weight carries up to half a quantization step of error, so the int4
+base is a noisier function than its fp16 original, and the noise compounds
+across ~32 layers. With naive uniform int4 the cost is real; NF4 (levels at
+normal quantiles, ~30% lower mean error) plus 64-weight blocks (outlier
+containment) recover most of it — the QLoRA paper reports matching 16-bit
+LoRA fine-tuning on its benchmarks. The bite is uneven: style and fluency
+tasks barely move, while multi-step math reasoning degrades most, since long
+chains give small errors many chances to flip an intermediate step.
+</Drill>
+
+<Drill q="Why not skip the adapters and just fine-tune the 4-bit weights directly?">
+Two independent killers. Numerically, a gradient update (~1e-4) is far below
+the int4 grid spacing (~1e-2): after re-quantization the weight rounds back
+to its old level, so training changes nothing — the update vanishes below the
+format's resolution, cousin to the underflow story in vanishing gradients.
+Structurally, rounding is a staircase: derivative zero almost everywhere, so
+backprop through the quantizer yields no learning signal without tricks like
+straight-through estimators. QLoRA sidesteps both by routing 100% of learning
+into bf16 adapters and never updating the 4-bit weights at all.
+</Drill>
+
+</Section>
