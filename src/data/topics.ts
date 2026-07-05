@@ -197,7 +197,7 @@ export const TOPICS: Topic[] = [
     title: 'Mixture of Experts',
     hook: 'A gating network routes each token to a few experts out of many — more parameters, roughly constant compute per token.',
     category: 'advanced',
-    status: 'planned',
+    status: 'ready',
     viz: 'Per-token gating + expert activation',
   },
   {

@@ -1,0 +1,257 @@
+---
+title: Mixture of Experts
+category: advanced
+hook: A gating network routes each token to a few experts out of many — more parameters, roughly constant compute per token.
+crossLinks:
+  - attention
+  - distillation
+  - context-window
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import MoeRoutingExplorer from '../../components/islands/MoeRoutingExplorer.tsx';
+
+<Section n={1} title="What Mixture of Experts is" tag="More parameters without more compute per token — and it is not personas">
+
+First, kill the wrong picture. "Mixture of Experts" does **not** mean several
+models with different personas debating an answer — that is a *prompting*
+pattern (multi-agent systems, debate). MoE is an **architectural** change buried
+inside the transformer, invisible from the outside: no expert ever sees a
+question, holds an opinion, or produces a prediction. An "expert" is just a
+feedforward network, and the "mixture" happens per token, per layer, millions of
+times per response.
+
+The problem it solves is a scaling bind. Model quality tracks parameter count,
+but in a dense transformer every parameter runs for every token — double the
+parameters, double the FLOPs per token, double the latency and the serving
+bill. MoE breaks that link: replace each feedforward layer with **N** expert
+networks plus a small **gating network** that routes every token to its
+**top-k** experts (usually k=2). The feedforward parameters — roughly
+two-thirds of a dense model — grow N-fold; the parameters *actually running*
+per token barely move.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> A Mixture of Experts
+  layer replaces one feedforward network with N of them (the <strong>experts</strong>)
+  plus a learned <strong>gating network</strong> that scores all N for each token,
+  runs only the top-k, and outputs the gating-weighted sum of their results.
+  Capacity scales with N; per-token compute scales with k.
+</div>
+
+The real numbers make the trade vivid. Mixtral 8x7B holds **46.7B** parameters
+but activates only **12.9B** per token — it prices like a 13B model and stores
+like a 47B one. DeepSeek-V3 pushes the ratio harder: **671B** total, **37B**
+active (5.5%), with 256 routed experts per layer and top-8 routing. This is why
+essentially every frontier lab ships MoE models: it is the only known way to
+keep growing capacity without the per-token bill growing in lockstep. The other
+lever on that bill — shrinking the model itself — is what the Distillation
+topic covers.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Gating logits → softmax → top-k experts run → weighted sum">
+
+Inside one transformer block, attention runs exactly as before — MoE touches
+only the feedforward half of the block. Then, for **each token independently**:
+
+1. The token's representation $x$ (one vector, e.g. 4096 numbers) hits the
+   gating network: a single matrix multiply producing one **logit per expert**.
+   The router is comically small — in Mixtral it is a 4096×8 matrix, ~33k
+   parameters per layer, deciding how to spend 1.4B parameters of experts.
+2. A **softmax** turns the logits into routing probabilities — the same
+   squash-to-a-distribution move the Softmax topic covers.
+3. The **top-k** experts by logit are selected; their weights are renormalized
+   (softmax over just the k winning logits).
+4. Only those k experts execute. Each expert is an ordinary feedforward
+   network: token representation in, transformed representation of the **same
+   shape** out. An expert transforms — it never predicts. The next-token
+   prediction happens once, at the final output layer, after all blocks.
+5. The layer's output is the weighted sum $y = \sum_i w_i \, E_i(x)$, which
+   flows to the next block like any feedforward output would.
+
+Routing happens at **training and inference both**. The gating weights are
+learned during training — gradients flow to the router through the weighted
+sum — and at inference the learned router just runs forward like every other
+layer. There is no separate "routing phase."
+
+<VizFrame
+  label="MoE routing — one layer, 8 experts, real gating math"
+  caption="Click tokens to see each one's gating: full softmax over 8 experts, top-k winners kept, weights renormalized. Notice keywords, identifiers, and punctuation cluster on different experts, and the two ':' tokens pick the same pair in different orders. Flip k: active parameters (real Mixtral numbers) scale with k, and k=8 is just a dense model. Then look at the load histogram — two experts starve while one hogs a third of the slots."
+>
+  <MoeRoutingExplorer client:visible />
+</VizFrame>
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-live bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">What experts actually specialize in.</span>
+  Not topics. When the Mixtral authors looked for a "math expert" or a "code
+  expert," they didn't find one — routing correlates with <em>syntax and token
+  identity</em> (punctuation, indentation, number-like tokens) far more than
+  with subject matter, and consecutive tokens often reuse the same expert. The
+  toy sequence above shows type-flavored routing because that is the pattern
+  that does emerge; nobody assigns experts a specialty, and no expert is a
+  domain specialist you could name.
+</div>
+
+</Section>
+
+<Section n={3} title="Worked example" tag="One token through the router, and Mixtral's parameter ledger">
+
+Take the token `def` from the sequence above, with gating logits over 8
+experts. Softmax them (exponentiate, divide by the sum — here
+$\sum e^{z_i} = 21.69$):
+
+| expert | logit $z$ | $e^z$ | softmax | top-2? | renormalized weight |
+| --- | --- | --- | --- | --- | --- |
+| E0 | 1.2 | 3.32 | 15.3% | — | — |
+| E1 | −0.3 | 0.74 | 3.4% | — | — |
+| **E2** | **2.1** | **8.17** | **37.7%** | ✓ | **0.574** |
+| E3 | 0.4 | 1.49 | 6.9% | — | — |
+| E4 | −1.0 | 0.37 | 1.7% | — | — |
+| **E5** | **1.8** | **6.05** | **27.9%** | ✓ | **0.426** |
+| E6 | 0.0 | 1.00 | 4.6% | — | — |
+| E7 | −0.6 | 0.55 | 2.5% | — | — |
+
+E2 and E5 win. Renormalize over just their logits:
+$e^{2.1}/(e^{2.1}+e^{1.8}) = 8.17/14.22 = 0.574$. The layer's output is
+
+$$
+y = 0.574 \cdot E_2(x) + 0.426 \cdot E_5(x)
+$$
+
+and experts E0, E1, E3, E4, E6, E7 never execute for this token. The whole
+router is a few lines:
+
+```python
+import numpy as np
+
+def moe_layer(x, W_gate, experts, k=2):
+    logits = x @ W_gate                    # (8,) — one score per expert
+    top = np.argsort(logits)[-k:]          # e.g. [5, 2] — the top-k experts
+    w = np.exp(logits[top] - logits[top].max())
+    w = w / w.sum()                        # softmax over the k winners only
+    return sum(w_i * experts[i](x) for w_i, i in zip(w, top))
+
+# logits for "def": [1.2, -0.3, 2.1, 0.4, -1.0, 1.8, 0.0, -0.6]
+# -> top = [5, 2], w = [0.426, 0.574]
+# -> y = 0.574 * experts[2](x) + 0.426 * experts[5](x)
+```
+
+Now the parameter ledger for Mixtral 8x7B (model width 4096, expert hidden
+size 14336, 32 layers, 8 experts, top-2). Each expert is a SwiGLU feedforward —
+three 4096×14336 matrices:
+
+| what | count |
+| --- | --- |
+| one expert, one layer | 3 × 4096 × 14336 = **176M** |
+| all 8 experts, one layer | 1.41B |
+| all experts, all 32 layers | **45.1B** |
+| the routers, all 32 layers | 32 × 4096 × 8 ≈ 1.05M |
+| shared: attention, embeddings, norms | ≈ 1.6B |
+| **total** | **46.7B** |
+| **active per token** (shared + 2 experts × 32 layers) | 1.6B + 2 × 176M × 32 = **12.9B** |
+
+Active is 2/8 of the expert parameters plus everything shared. That single
+table is the entire business case for MoE: 46.7B parameters of capacity at
+12.9B parameters of per-token compute.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Load imbalance, dropped tokens, and memory that never got cheaper">
+
+- **Load imbalance — the rich get richer.** Nothing forces the router to
+  spread tokens out. An expert that starts slightly better attracts more
+  tokens, trains more, and gets better still, while others starve into **dead
+  experts** — pure wasted parameters (the load histogram above shows the
+  pattern: two experts idle, one hogging a third of the slots). The standard
+  fix is an **auxiliary load-balancing loss** added during training — the
+  Switch Transformer version penalizes the product of each expert's token
+  fraction and mean routing probability, scaled by a small coefficient
+  (α = 0.01) — nudging the router toward uniform usage without overriding it.
+- **Token dropping (in capacity-factor implementations).** For efficient
+  batching, the GShard/Switch lineage gives each expert a fixed buffer per
+  batch (the *capacity factor*). When a popular expert's buffer fills, the
+  overflow tokens **skip the layer entirely** — passed along by the residual
+  connection, untransformed. Your model silently did less compute on exactly
+  the tokens that crowded the popular expert. "Dropless" kernels
+  (MegaBlocks-style) avoid this, at the cost of ragged, less efficient
+  batching.
+- **Routing is a discrete choice inside a gradient-based learner.** Top-k is a
+  hard cutoff: an expert outside the top-k gets no gradient signal from tokens
+  it didn't see, and a tiny logit shift flips a token's entire compute path.
+  Training can oscillate — routers are the twitchiest part of MoE training,
+  which is why recipes add stabilizers like the router z-loss and why
+  fine-tuning MoE models is notoriously brittle.
+- **Memory never got cheaper.** Sparsity saves FLOPs, not bytes. All 46.7B
+  Mixtral parameters must sit in GPU memory — ~93GB in fp16 — because any token
+  might route anywhere. You serve a 13B-compute model out of 47B-parameter
+  hardware. (Distillation makes the *weights* smaller; MoE only makes the
+  *per-token compute* smaller.)
+- **Different tokens take different hardware paths.** At DeepSeek-V3 scale,
+  experts are sharded across GPUs (*expert parallelism*), so each MoE layer
+  needs an all-to-all network exchange to ship every token to its experts and
+  back — twice per MoE layer. Two tokens in the same sentence can
+  literally be processed on different machines, and that communication is a
+  real tax on throughput.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="What is the router in an MoE layer called, and how big is it relative to what it controls?">
+The gating network. It is one learned matrix per MoE layer, mapping the token
+representation to one logit per expert — in Mixtral, 4096×8 ≈ 33k parameters
+deciding among 1.4B parameters of experts in that layer. Softmax the logits,
+take the top-k, renormalize over the winners, and use those weights to combine
+the expert outputs. The intelligence is in the experts; the router is a cheap
+learned dispatcher.
+</Drill>
+
+<Drill q="Does expert routing happen at training time or at inference time?">
+Both. The gating network is *learned* during training — gradients reach it
+through the weighted sum of expert outputs — and at inference the trained
+router simply runs forward for every token at every MoE layer, like any other
+layer. There is no routing table computed offline; the same softmax-and-top-k
+executes on every forward pass.
+</Drill>
+
+<Drill q="What goes into an expert and what comes out? Does the winning expert produce the model's prediction?">
+One token's representation goes in; a transformed representation of the same
+shape comes out. An expert is an ordinary feedforward network — a function, not
+a model. It never sees the prompt as text and never predicts anything. The
+next-token distribution is produced once, by the final output projection and
+softmax over the vocabulary, after all transformer blocks — by which point
+every token has passed through dozens of expert mixtures.
+</Drill>
+
+<Drill q="How does MoE interact with attention?">
+It doesn't touch it. A transformer block is attention + feedforward; MoE swaps
+only the feedforward half, and the attention layers stay shared and dense —
+every token still attends over the full context identically (see the Attention
+topic). That placement is deliberate: the FFN holds roughly two-thirds of a
+dense transformer's parameters, so it is where sparsity buys the most, while
+attention is the part that mixes information *across* tokens and is harder to
+sparsify per token.
+</Drill>
+
+<Drill q="Mixtral is 46.7B total / 12.9B active. What does that buy, and what does it not buy?">
+It buys capacity decoupled from per-token compute: the FLOPs, and therefore
+latency and serving cost per token, of a ~13B dense model with the learned
+capacity of a much larger one. It does **not** buy memory: all 46.7B parameters
+must be resident (~93GB in fp16) because any token might route to any expert.
+And it does not reduce context or KV-cache costs — attention is untouched, so
+the context-window bill is identical to a dense model of the same width.
+</Drill>
+
+<Drill q="Why is k=2 the common choice — why not k=1 or k=8?">
+k=8 (all experts) is just a dense model with extra steps — you pay full compute
+and the sparsity advantage vanishes, as flipping k in the widget shows. k=1
+works (the Switch Transformer proved it) and is the cheapest, but it is less
+stable and gives the router no within-token comparison between experts. k=2 is
+the empirical sweet spot: a second opinion's worth of quality and smoother
+routing gradients for roughly 2/N of the expert compute — in Mixtral,
+2 of 8 experts ≈ 11.3B of the 45.1B expert parameters active per token.
+</Drill>
+
+</Section>
