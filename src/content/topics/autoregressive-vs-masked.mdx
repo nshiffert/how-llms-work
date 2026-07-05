@@ -1,0 +1,254 @@
+---
+title: Autoregressive vs Masked
+category: generation
+hook: "Same transformer block, two training objectives: predict the next token left-to-right, or fill blanks using both sides."
+crossLinks:
+  - attention
+  - embeddings
+  - rag
+  - beam-vs-greedy
+---
+
+import Section from '../../components/topic/Section.astro';
+import Drill from '../../components/topic/Drill.astro';
+import VizFrame from '../../components/topic/VizFrame.astro';
+import ArVsMaskedExplorer from '../../components/islands/ArVsMaskedExplorer.tsx';
+
+<Section n={1} title="What the split is" tag="One architecture, two training objectives — and the objective decides the job">
+
+GPT and BERT are built from the **same transformer block** — the same
+attention, the same feed-forward layers, the same residual stream. What
+separates them is not architecture. It is the question the model was trained to
+answer, trillions of times: *"what comes next?"* versus *"what got
+hidden?"* That one choice — the training objective, plus the attention mask
+that enforces it — determines everything downstream: whether the model can
+write, whether it makes good embeddings, and which half of a RAG system it
+belongs in.
+
+An **autoregressive** model (GPT, Llama, Claude) is trained to predict the next
+token given only the tokens before it. A **causal mask** inside attention
+blocks every token from seeing its future, so the prediction at position *t* is
+honest — it really was made from positions 0 through *t−1* alone. A **masked**
+model (BERT, RoBERTa) plays a different game: hide ~15% of the tokens in a
+sentence and reconstruct them using context from **both sides**. No causal
+mask, full bidirectional attention.
+
+<div class="my-5 rounded-xl2 border border-line border-l-2 border-l-accent bg-ink-700/40 px-4 py-3 text-sm text-fg-muted">
+  <span class="font-semibold text-fg">Definition.</span> An
+  <strong>autoregressive LM</strong> factorizes the sequence probability
+  left-to-right — <em>p(x) = ∏ p(x<sub>t</sub> | x<sub>&lt;t</sub>)</em> — and
+  trains with next-token cross-entropy at <em>every</em> position under a
+  causal attention mask. A <strong>masked LM</strong> corrupts the input by
+  hiding a random ~15% of tokens and trains to recover <em>only those</em>,
+  attending bidirectionally. Same block; different objective, different mask.
+</div>
+
+The most common misconception is that these are two architectures. They are
+two **objectives**. You can take one transformer implementation and turn it
+into either model by flipping two switches: whether the attention scores get a
+lower-triangular mask, and which positions the loss is computed at.
+
+</Section>
+
+<Section n={2} title="The mechanic" tag="Loss at every position under a causal mask, vs loss at masked positions under no mask">
+
+The autoregressive objective is brutally simple: at every position, the model
+outputs a distribution over the vocabulary for the *next* token, and pays
+cross-entropy against the token that actually came next. Because the causal
+mask already prevents peeking, one forward pass over a sequence of *T* tokens
+scores all *T−1* predictions in parallel (this is teacher forcing — training
+never waits for the model's own outputs). Every token in the corpus is a
+training signal.
+
+The masked objective corrupts first, then reconstructs. BERT's recipe: select
+15% of input positions; of those, replace 80% with a special `[MASK]` token,
+10% with a random token, and leave 10% unchanged. The model attends across the
+whole (corrupted) sentence in both directions and pays cross-entropy **only at
+the selected positions**. The other 85% of tokens contribute context but
+produce no loss terms of their own.
+
+Run both objectives on the same sentence:
+
+<VizFrame
+  label="One sentence, two objectives"
+  caption="Left: press 'predict next' to step the autoregressive pass — each position is scored from its left context only (watch the causal-mask row light up), and a red loss lands on every position. Right: press 'predict masks' for the masked pass — one parallel bidirectional pass, losses only on the ~15% hidden slots; click a [MASK] to see it read both sides. Notice position 2: 'sat' costs the AR pass 1.71 nats but the masked pass only 0.30 — seeing 'on the mat' makes fill-in far easier."
+>
+  <ArVsMaskedExplorer client:visible />
+</VizFrame>
+
+Two asymmetries in that panel carry the whole topic. **Context:** the AR
+prediction for "sat" sees only "the cat"; the masked prediction sees "the cat _
+on the mat because it was warm" — so its probability jumps from 0.18 to 0.74.
+Bidirectional context makes reconstruction easier, which is exactly why masked
+models build better representations for *understanding*. **Signal:** the AR
+pass collects 9 loss terms from a 10-token sentence; the masked pass collects
+2. Per pass, the masked model learns from ~15% of its tokens — one reason BERT
+needed ~40 epochs over its 3.3B-word corpus while GPT-style models typically
+see their data about once.
+
+</Section>
+
+<Section n={3} title="Worked example" tag="The two masks, the loss table, real numbers">
+
+Take the 10-token sentence from the widget: `the cat sat on the mat because it
+was warm`. The causal mask is a 10×10 lower-triangular boolean matrix — row
+*t* may attend to columns 0…*t* only, so **55 of the 100** attention edges
+survive. The masked-LM setup instead keeps all 100 edges and hides positions 2
+and 8 (2 of 10 ≈ the 15% draw). Here is where the loss is computed in each:
+
+| pos | token | AR: context used | AR loss | MLM: input shown | MLM loss |
+| --- | --- | --- | --- | --- | --- |
+| 0 | the | — (nothing to its left) | — | `the` | — |
+| 1 | cat | `the` | −ln 0.02 = **3.91** | `cat` | — |
+| 2 | sat | `the cat` | −ln 0.18 = **1.71** | `[MASK]` | −ln 0.74 = **0.30** |
+| 3 | on | `the cat sat` | −ln 0.55 = **0.60** | `on` | — |
+| 4 | the | … | −ln 0.72 = **0.33** | `the` | — |
+| 5 | mat | … | −ln 0.34 = **1.08** | `mat` | — |
+| 6 | because | … | −ln 0.08 = **2.53** | `because` | — |
+| 7 | it | … | −ln 0.61 = **0.49** | `it` | — |
+| 8 | was | … | −ln 0.68 = **0.39** | `[MASK]` | −ln 0.89 = **0.12** |
+| 9 | warm | all 9 left tokens | −ln 0.25 = **1.39** | `warm` | — |
+
+The AR pass pays **12.43 nats over 9 positions** — a mean of 1.38 nats/token,
+i.e. perplexity e<sup>1.38</sup> ≈ 4.0 on this toy sentence. The masked pass
+pays **0.42 nats over 2 positions** — lower per token because both-sided
+context makes each reconstruction easier, but there are only two of them.
+(That −ln p quantity is exactly the cross-entropy loss; the Cross-Entropy
+topic is the deep dive.)
+
+Both "switches" are a few lines of tensor code:
+
+```python
+import torch
+
+T = 10
+# ── switch 1: the attention mask ──────────────────────────────
+causal = torch.tril(torch.ones(T, T, dtype=torch.bool))
+causal.sum()                    # tensor(55)  — 55 of 100 edges survive
+# inside attention, applied BEFORE the softmax:
+#   scores = scores.masked_fill(~causal, float("-inf"))
+# masked LM: no mask at all — all 100 edges stay.
+
+# ── switch 2: where the loss is computed ──────────────────────
+# autoregressive: shift by one, every position pays
+#   loss = F.cross_entropy(logits[:-1], ids[1:])        # 9 terms
+
+# masked LM: select 15%, corrupt 80/10/10, only selected pay
+sel = torch.zeros(T, dtype=torch.bool)
+sel[[2, 8]] = True              # this pass's 15% draw
+r = torch.rand(T)
+to_mask   = sel & (r < 0.80)              # 80% → [MASK] token
+to_random = sel & (r >= 0.80) & (r < 0.90)  # 10% → random vocab id
+# remaining 10% keep the true token — but ALL of `sel` pays loss:
+#   loss = F.cross_entropy(logits[sel], ids[sel])       # 2 terms
+```
+
+For scale: BERT-base (110M parameters, 30,522-token WordPiece vocabulary)
+trained this objective for 1M steps at 256 sequences × 512 tokens per batch —
+about 40 passes over 3.3B words of BooksCorpus + English Wikipedia.
+
+</Section>
+
+<Section n={4} title="What breaks" tag="Use the wrong objective for the job and it fails structurally, not subtly">
+
+- **A masked model cannot write.** It was never trained to extend a sequence —
+  it fills fixed blanks in text it can already see both sides of. There is no
+  left-to-right factorization to sample from, so "generate with BERT" means
+  iteratively re-masking and re-predicting, which is slow and produces
+  incoherent text. If the output is a sequence, you need autoregressive.
+- **An off-the-shelf AR model is a weaker embedder.** Under the causal mask,
+  the representation of token *t* has never seen anything after *t* — the
+  first half of your sentence is encoded in ignorance of the second half.
+  Pooling the last token squeezes the whole meaning through one position.
+  That is why retrieval embedders are bidirectional; the strong LLM-based
+  embedders that do exist get there by re-enabling bidirectional attention
+  and fine-tuning with a contrastive objective, not by using the AR model
+  as-is. The Embeddings topic covers what those vectors need to support.
+- **`[MASK]` never shows up at inference.** The token BERT leaned on in
+  pretraining does not appear in any downstream input — a real train/test
+  mismatch. The 80/10/10 corruption recipe exists to blunt exactly this: 20%
+  of selected positions carry a real token, forcing the model to keep a
+  usable representation at every position, not just at literal `[MASK]` slots.
+- **The 15% signal is expensive.** Only ~15% of tokens per pass generate
+  gradient; an AR pass uses ~100%. The BERT authors measured the consequence:
+  the masked objective converges more slowly than left-to-right training and
+  needs many epochs over the corpus — it wins on downstream *quality* for
+  understanding tasks, not on training efficiency.
+- **Teacher forcing hides compounding errors.** The AR model trains only on
+  gold prefixes but at inference conditions on its *own* sampled outputs. One
+  bad token drags the sequence off the training distribution and errors
+  compound — this exposure bias is a root cause of long-generation drift, and
+  sampling choices (see Temperature and Top-k vs Top-p) manage the symptom.
+- **Chain-of-thought is AR-only.** Reasoning in intermediate tokens requires
+  *producing* intermediate tokens that feed back as context for the next step.
+  A masked model has no mechanism for that loop — the entire "think step by
+  step" family of techniques presupposes an autoregressive decoder.
+
+</Section>
+
+<Section n={5} title="Interview pressure test" tag="Answers hidden — use as flashcards">
+
+<Drill q="Where is the loss computed in each objective, and what does that imply about training efficiency?">
+Autoregressive: cross-entropy at every position — predict token t+1 from
+tokens ≤ t, so a T-token sequence yields T−1 loss terms in one forward pass
+(teacher forcing). Masked: cross-entropy only at the ~15% of positions
+selected for corruption; the other 85% provide context but no gradient. So per
+pass the AR objective extracts roughly 6–7× more supervision from the same
+text — which is why BERT ran ~40 epochs over 3.3B words while modern AR models
+typically make about one pass over a much larger corpus. The masked model buys
+representation quality per parameter, not signal per token.
+</Drill>
+
+<Drill q="Causal vs bidirectional attention — which goes with which objective, and where exactly does the causal mask act?">
+Causal attention goes with the autoregressive objective; bidirectional with
+the masked objective. The causal mask is a lower-triangular matrix applied to
+the attention scores *before* the softmax, setting future positions to −∞ so
+they get exactly zero weight (post-softmax masking would leak probability —
+the Attention topic's drill on this is the same fact). It exists because
+next-token training would be trivially cheatable if position t could attend to
+t+1. The masked objective has nothing to hide — the blanks are hidden in the
+input itself — so it needs no mask at all.
+</Drill>
+
+<Drill q="You need (a) a chatbot and (b) a semantic-search index. Which objective backs each, and why?">
+(a) Autoregressive — chat output is a sequence, and only an AR model defines
+p(next token | prefix) to sample from. (b) A bidirectional (masked-objective)
+encoder — each token's representation integrates both sides, and mean-pooling
+over positions gives a sentence vector that captures the whole input, which is
+what cosine similarity over an index needs. This is exactly the division of
+labor inside RAG: a BERT-family embedder retrieves the chunks, an AR model
+reads them and generates the answer.
+</Drill>
+
+<Drill q="Can you get both behaviors in one system?">
+Yes, two ways. Architecturally: encoder–decoder models (T5, the original
+transformer) bolt a bidirectional encoder onto an autoregressive decoder —
+read with full context, write left-to-right; a prefix-LM does the same trick
+inside one stack by leaving the prompt un-masked and generating causally after
+it. Systemically: pair two separate models, which is what RAG does — a
+bidirectional embedder for retrieval, an AR generator for the answer. What you
+cannot do is make one set of weights do both jobs well without one of these
+tricks: the attention-mask requirements conflict.
+</Drill>
+
+<Drill q="Why the 80/10/10 corruption split instead of always using [MASK]?">
+Because `[MASK]` is a pretraining-only token — it never appears in downstream
+inputs, so a model that only ever predicts at literal `[MASK]` slots learns
+representations keyed to a token it will never see again. Replacing 10% of
+selected positions with a random token and leaving 10% unchanged forces the
+model to maintain a full predictive representation at *every* position — it
+can't tell which real tokens are secretly being scored. It's a train/test
+distribution-shift patch baked into the objective.
+</Drill>
+
+<Drill q="Why can only autoregressive models do chain-of-thought?">
+Chain-of-thought works because each generated token is appended to the context
+and conditions everything after it — the intermediate steps are scaffolding
+the model builds and then stands on. That loop requires sequential generation:
+produce a token, feed it back, produce the next. A masked model predicts a
+fixed set of blanks in one parallel pass; there is no mechanism for its
+predictions to become new context for later predictions, so there is nowhere
+for intermediate reasoning to live.
+</Drill>
+
+</Section>

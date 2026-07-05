@@ -171,7 +171,7 @@ export const TOPICS: Topic[] = [
     title: 'Autoregressive vs Masked',
     hook: 'Same transformer block, two training objectives: predict the next token left-to-right, or fill blanks using both sides.',
     category: 'generation',
-    status: 'planned',
+    status: 'ready',
     viz: 'Parallel left-to-right vs fill-in',
   },
 
