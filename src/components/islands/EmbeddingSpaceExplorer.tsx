@@ -65,6 +65,7 @@ const rareSet = new Set(RAREST.map((p) => p.w));
 export default function EmbeddingSpaceExplorer() {
   const [mode, setMode] = useState<'space' | 'train'>('space');
   const [selected, setSelected] = useState<string>('king');
+  const [hovered, setHovered] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [progress, setProgress] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -236,22 +237,25 @@ export default function EmbeddingSpaceExplorer() {
             const fill = isSel ? ACCENT : isNb ? LIVE : isRare ? RARE : DOT;
             const r = isSel ? 0.028 : isNb || isRare ? 0.02 : 0.013;
             const labeled =
-              isSel ||
-              isNb ||
-              isRare ||
-              (LANDMARKS.includes(p.w) && (mode === 'space' || progress >= 1));
+              hovered !== p.w &&
+              (isSel ||
+                isNb ||
+                isRare ||
+                (LANDMARKS.includes(p.w) && (mode === 'space' || progress >= 1)));
             return (
               <g key={p.w}>
+                <circle cx={x} cy={y} r={r} fill={fill} pointerEvents="none" />
+                {/* oversized transparent hit area so tiny dots are hoverable */}
                 <circle
                   cx={x}
                   cy={y}
-                  r={r}
-                  fill={fill}
+                  r={0.034}
+                  fill="transparent"
                   className={mode === 'space' ? 'cursor-pointer' : undefined}
+                  onMouseEnter={() => setHovered(p.w)}
+                  onMouseLeave={() => setHovered((h) => (h === p.w ? null : h))}
                   onClick={mode === 'space' ? () => setSelected(p.w) : undefined}
-                >
-                  <title>{`${p.w} (seen ${p.c.toLocaleString()}×)`}</title>
-                </circle>
+                />
                 {labeled && (
                   <text
                     x={x > 0.7 ? x - 0.035 : x + 0.035}
@@ -268,6 +272,39 @@ export default function EmbeddingSpaceExplorer() {
               </g>
             );
           })}
+
+          {/* hover label — drawn last so it sits above every dot */}
+          {(() => {
+            const hp = hovered ? byWord.get(hovered) : undefined;
+            if (!hp) return null;
+            const [x, y] = pos(hp);
+            const isSel = mode === 'space' && hp.w === selected;
+            const isNb = mode === 'space' && neighborSet.has(hp.w);
+            const isRare = mode === 'train' && rareSet.has(hp.w);
+            const color = isSel ? ACCENT : isNb ? LIVE : isRare ? RARE : '#e2e8f0';
+            const flip = x > 0.7;
+            return (
+              <g pointerEvents="none">
+                <circle cx={x} cy={y} r={0.024} fill="none" stroke={color} strokeWidth={0.006} />
+                <text
+                  x={flip ? x - 0.04 : x + 0.04}
+                  textAnchor={flip ? 'end' : 'start'}
+                  y={y + 0.018}
+                  fontSize={0.058}
+                  fontFamily="ui-monospace, monospace"
+                  fill={color}
+                  stroke="rgba(9,11,16,0.85)"
+                  strokeWidth={0.014}
+                  paintOrder="stroke"
+                >
+                  {hp.w}
+                  <tspan fill="rgba(148,163,184,0.8)" fontSize={0.042}>
+                    {` ${hp.c.toLocaleString()}×`}
+                  </tspan>
+                </text>
+              </g>
+            );
+          })()}
         </svg>
 
         {/* Neighbor panel (trained space only) */}
