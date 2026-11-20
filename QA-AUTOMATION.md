@@ -51,7 +51,7 @@ Routing uses the URL hash, so every page is the same HTML file.
 | `/#/` | Home (the map) | Any unknown hash also lands here |
 | `/#/placement` | Placement | Six optional questions |
 | `/#/lesson/<id>` | Lesson player | `<id>` is one of the 22 lesson ids below. An unknown id shows Home |
-| `/#/review` | Review | Shows an empty state when nothing is due |
+| `/#/review` | Review | Shows an empty state until at least one lesson is finished |
 
 Redirects from the previous site, served by the host (302):
 
@@ -91,7 +91,9 @@ Top to bottom:
 
 Six multiple-choice questions, one per stage, each with a "Not sure yet"
 option listed last. The other options are shuffled on every visit. Finishing
-sets a starting skill level per stage and returns to Home. It can be skipped.
+sets a starting skill level per stage and shows a result screen that marks each
+stage "Ahead" or "Guided", with a button to open the map. Placement can be
+skipped from any question.
 
 ### Lesson player
 
@@ -130,8 +132,10 @@ Behaviour a tester should expect:
 
 Up to five questions drawn from finished lessons that are due, mixed with
 questions from closely related lessons. Finished lessons become due after
-1 day, then 3 days, then at growing intervals. With nothing due, the page
-shows an empty state and a link back to the map.
+1 day, then 3 days, then at growing intervals. If lessons are finished but none
+is due, opening Review directly still builds a session from the finished
+lessons. With no finished lessons, the page shows an empty state and a link
+back to the map.
 
 ## Curriculum
 
