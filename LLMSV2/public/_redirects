@@ -1,0 +1,8 @@
+/topics/:slug/ /#/lesson/:slug 302
+/topics/:slug /#/lesson/:slug 302
+/audio-tutor/ / 302
+/audio-tutor / 302
+/glossary/ / 302
+/glossary / 302
+/interview-drills/ / 302
+/interview-drills / 302
